@@ -1,0 +1,109 @@
+---
+title: "PDAC_lncRNAs"
+output: html_document
+date: "2026-06-15"
+---
+
+#Librerie
+```{r}
+library(Seurat)
+library(Matrix)
+library(anndataR)
+```
+
+
+# funzione h5ad to Seurat
+```{r}
+h5ad_to_seurat <- function(file_path) {
+  
+  # load h5ad
+  ad <- read_h5ad(file_path)
+  
+  # expression matrix (AnnData: cells x genes → Seurat: genes x cells)
+  expr <- t(ad$X)
+  
+  # Seurat object
+  obj <- CreateSeuratObject(
+    counts = expr,
+    assay = "RNA"
+  )
+  
+  # metto i dati nel layer data (caso default: dati già normalizzati)
+  obj <- SetAssayData(
+    obj,
+    layer = "data",
+    new.data = expr
+  )
+  
+  # aggiungo metadata se presenti
+  if (!is.null(ad$obs)) {
+    obj <- AddMetaData(
+      obj,
+      metadata = ad$obs[colnames(obj), ]
+    )
+  }
+  
+  return(obj)
+}
+```
+
+# uso
+```{r}
+obj1 <- h5ad_to_seurat("/mnt/akira/home/vmoriello/DATAH/pdac_GSE141017.h5ad")
+obj1
+colnames(obj1@meta.data)
+head(colnames(obj1))
+head(obj1@meta.data)
+head(rownames(obj1))
+
+# I dati sono già normalizzati quindi 
+#mito_genes <- grepl("^MT-", rownames(obj1))
+#sum(mito_genes)
+#expr <- GetAssayData(obj1, layer = "data")
+
+#obj1$percent.mt <- Matrix::colSums(expr[mito_genes, , drop = FALSE]) /  Matrix::colSums(expr) * 100
+
+#head(obj1@meta.data$percent.mt)
+#summary(obj1$percent.mt)
+#head(obj1@meta.data)
+
+obj2 <- h5ad_to_seurat("/mnt/akira/home/vmoriello/DATAH/pdac_GSE154778.h5ad")
+obj2
+colnames(obj2@meta.data)
+head(colnames(obj2))
+head(obj2@meta.data)
+head(rownames(obj2))
+
+obj3 <- h5ad_to_seurat("/mnt/akira/home/vmoriello/DATAH/pdac_GSE155698.h5ad")
+obj3
+colnames(obj3@meta.data)
+head(colnames(obj3))
+head(obj3@meta.data)
+head(rownames(obj3))
+
+obj1$GSE <- "GSE141017"
+obj2$GSE <- "GSE154778"
+obj3$GSE <- "GSE155698"
+
+obj <- merge(obj1, y=list(obj2, obj3))
+obj <- JoinLayers(obj, force = TRUE)
+obj
+DefaultAssay(obj) <- "RNA"
+
+obj <- FindVariableFeatures(obj)
+obj <- ScaleData(obj)
+obj <- RunPCA(obj)
+
+obj <- RunHarmony(
+  obj,
+  group.by.vars="GSE",
+  reduction="pca",
+  dims.use=1:30
+)
+
+obj <- RunUMAP(obj, reduction="harmony", dims=1:30)
+DimPlot(obj, reduction="umap", group.by="GSE")
+
+
+```
+
