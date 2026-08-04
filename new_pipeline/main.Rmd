@@ -1,0 +1,440 @@
+---
+title: "Single-cell RNA-seq Pipeline"
+author: "Valeria Moriello"
+date:
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+# Introduction
+
+This document implements a complete preprocessing pipeline for single-cell RNA-seq data.
+The pipeline can create Seurat objects from raw count matrices or AnnData .h5ad files;
+the current analysis starts from compressed, tab-delimited raw UMI count matrices and
+their corresponding cell annotation files. The workflow performs basic quality control
+filtering based on mitochondrial gene expression and prepares the datasets for downstream
+analyses such as normalization, clustering, and visualization.
+
+
+# Libraries
+
+```{r}
+library(Matrix)
+library(Seurat)
+library(reticulate)
+library(dplyr)
+library(stringr)
+library(DescTools)
+library(scales)
+library(ggplot2)
+library(ggvenn)
+library(pals)
+library(ggpubr)
+library(ggrepel)
+library(Nebulosa)
+library(scMRMA)
+
+project_dir <- "/home/drighelli/lncRNA_project"
+
+data_dir <- file.path(project_dir, "DATA")
+
+# Reserved for possible AnnData (.h5ad) inputs.
+datah_dir <- file.path(project_dir, "DATAH")
+
+# Store all CRC-specific results separately from other outputs.
+out_dir <- file.path(project_dir, "OUT", "CRC")
+
+dir.create(
+  out_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+source(file.path(project_dir, "functions.R"))
+```
+
+# Dataset definition
+
+All datasets to be processed are defined in a single list.
+Each entry contains three fields: `counts` is the path to a compressed, tab-delimited raw
+UMI count matrix; `meta` is the path to the corresponding cell annotation file; and `save`
+is the path where the resulting Seurat object is saved.
+
+To add a new dataset, simply append a new GSE entry to this list.
+
+```{r}
+datasets <- list(
+  
+  GSE144735 = list(
+    counts = file.path(data_dir, "GSE144735_processed_KUL3_CRC_10X_raw_UMI_count_matrix.txt.gz"),
+    meta = file.path(data_dir, "GSE144735_processed_KUL3_CRC_10X_annotation.txt.gz"),
+    save = file.path(out_dir, "obj_GSE144735_qc.rds")
+  ),
+  
+  GSE132465 = list(
+    counts = file.path(data_dir, "GSE132465_GEO_processed_CRC_10X_raw_UMI_count_matrix.txt.gz"),
+    meta = file.path(data_dir, "GSE132465_GEO_processed_CRC_10X_cell_annotation.txt.gz"),
+    save = file.path(out_dir, "obj_GSE132465_qc.rds")
+  ),
+  
+  GSE132257 = list(
+    counts = file.path(
+      data_dir,
+      "GSE132257_GEO_processed_protocol_and_fresh_frozen_raw_UMI_count_matrix.txt.gz"
+    ),
+    meta = file.path(
+      data_dir,
+      "GSE132257_processed_protocol_and_fresh_frozen_cell_annotation.txt.gz"
+    ),
+    save = file.path(out_dir, "obj_GSE132257_qc.rds")
+  )
+  
+)
+
+# To add a fourth dataset:
+# simply add another element in the list above following the same structure.
+```
+
+# Preprocessing pipeline (loop over datasets)
+
+This loop uses `load_txt_counts_to_seurat()` to process all datasets currently defined
+above from raw UMI count matrices and cell annotation files, and stores the resulting
+Seurat objects in a list.
+
+```{r}
+obj_list <- list()
+
+for (name in names(datasets)) {
+  
+  cat("Processing dataset:", name, "\n")
+  
+  obj_list[[name]] <- load_txt_counts_to_seurat(
+    counts_file = datasets[[name]]$counts,
+    meta_file = datasets[[name]]$meta,
+    save_path = datasets[[name]]$save
+  )
+  
+  cat("Completed dataset:", name, "\n\n")
+}
+
+print(names(obj_list))
+
+saveRDS(obj_list, file.path(out_dir, "obj_list_all.rds"))
+
+obj_list[[1]]
+
+```
+
+# Merge Datasets
+
+```{r}
+merged_obj <- merge_seurat_objects(
+  obj_list = obj_list,
+  save_path = file.path(out_dir, "merged_seurat_qc.rds")
+)
+
+# Check Merged objs
+
+dim(merged_obj)
+
+print(merged_obj)
+
+table(merged_obj$GSE)
+
+head(merged_obj@meta.data)
+
+# Remove obj_list
+
+rm(obj_list)
+gc()
+```
+# QC Visualization (Supplementary 1A)
+
+This section evaluates basic quality control metrics across datasets,
+including number of detected genes, total counts, and mitochondrial percentage.
+
+```{r}
+merged_obj <- readRDS(file.path(out_dir, "merged_seurat_qc.rds"))
+obj <- merged_obj
+
+# define dataset colors (consistent palette)
+cols <- scales::hue_pal()(length(unique(obj$GSE)))
+
+VlnPlot(
+  obj,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  group.by = "GSE",
+  cols = cols,
+  ncol = 3,
+  pt.size = 0
+)
+```
+
+
+# Dimensionality Reduction
+
+This section performs normalization, feature selection, scaling,
+PCA, and UMAP embedding for downstream visualization.
+
+```{r}
+obj <- NormalizeData(obj)
+
+obj <- FindVariableFeatures(
+  obj,
+  selection.method = "vst",
+  nfeatures = 2000
+)
+
+obj <- ScaleData(obj, features = VariableFeatures(obj))
+
+obj <- RunPCA(obj, features = VariableFeatures(obj), npcs = 30)
+
+ElbowPlot(obj)
+
+obj <- RunUMAP(obj, dims = 1:15)
+```
+
+
+# Save Processed Object
+
+Save the processed Seurat object after normalization and dimensionality reduction.
+
+```{r}
+saveRDS(
+  obj,
+  file.path(out_dir, "merged_normalized_hvgs.rds")
+)
+```
+
+
+# UMAP Visualization (Supplementary 1B)
+
+This section visualizes batch effects across datasets using UMAP.
+
+```{r}
+DimPlot(obj, group.by = "GSE", cols = cols) +
+  theme(legend.position = "top")
+```
+
+# Cell Type Annotation (Reference Labels)
+This section performs cell type visualization, data preparation for
+scMRMA, automated annotation, and validation against original labels.
+
+## Original Cell Type Visualization
+
+Visualize annotated cell types provided in the dataset.
+
+```{r}
+plot_cell_types(obj, "Cell_type")
+```
+
+
+## Prepare Data for scMRMA
+  
+Extract normalized expression matrix required for annotation.
+
+```{r}
+tmp <- prepare_scrmra_input(obj)
+
+obj <- tmp$obj
+logcounts <- tmp$logcounts
+```
+
+  
+## Run scMRMA Annotation
+  
+Perform automated cell type prediction using reference-based annotation.
+
+```{r}
+obj <- run_scrmra_annotation(obj, logcounts)
+```
+
+  
+## Annotation Validation
+  
+Compare original annotations with scMRMA predictions.
+
+```{r}
+df <- as.data.frame(table(obj$Cell_type, obj$cell_type1))
+colnames(df) <- c("Original", "Validation", "Fraction")
+
+ggplot(df, aes(x = Original, y = Fraction, fill = Validation)) +
+  geom_bar(stat = "identity", position = "fill") +
+  theme_bw() +
+  coord_flip()
+```
+
+  
+# Re-check Visualization (Optional)
+  
+Visual confirmation of original labels.
+
+```{r}
+plot_cell_types(obj, "Cell_type")
+```
+
+# Cell type specificity
+This section quantifies cell type specificity of lncRNAs and protein-coding genes
+using the Gini coefficient computed from DotPlot-based expression summaries.
+
+```{r}
+obj <- readRDS(file.path(out_dir, "merged_seurat_qc.rds"))
+
+obj <- seurat_preprocess(obj)
+
+gencode <- read.table(file.path(data_dir, "gencode_v49_compatible.txt"), header = TRUE)
+
+gene_sets <- gene_biotype_matching(obj, gencode)
+
+lnc_features <- gene_sets$lnc
+prot_features <- gene_sets$prot
+ambiguous_genes <- gene_sets$ambiguous
+
+chunk_size <- 2000
+
+GiniCoef_lnc <- compute_gini_pipeline(obj, lnc_features, "lncRNA", chunk_size)
+GiniCoef_prot <- compute_gini_pipeline(obj, prot_features, "protein_coding", chunk_size)
+
+GiniCoef <- rbind(GiniCoef_lnc, GiniCoef_prot)
+colnames(GiniCoef)[1] <- "gene"
+
+saveRDS(GiniCoef, file.path(out_dir, "gini_dotplot_v49.rds"))
+
+GiniCoef <- readRDS(file.path(out_dir, "gini_dotplot_v49.rds"))
+
+GiniCoef_clean <- GiniCoef[!is.na(GiniCoef$gini), ]
+
+lnc_n  <- nrow(GiniCoef_clean %>% filter(type == "lncRNA"))
+prot_n <- nrow(GiniCoef_clean %>% filter(type == "protein_coding"))
+
+plot_gini_results(GiniCoef_clean, lnc_n, prot_n)
+```
+
+# Check Single Gene (CASC19)
+```{r}
+gene <- "CASC19"
+
+gene_info <- check_gene_summary(obj, gene)
+
+if (!gene_info$present) {
+
+  warning(
+    "Gene not present in the Seurat object: ",
+    gene,
+    ". Single-gene analysis skipped."
+  )
+
+} else {
+
+  print(gene_info$avg_expression)
+
+  print(
+    DotPlot(obj, features = gene) +
+      RotatedAxis()
+  )
+
+  casc_gini <- compute_gene_gini_single(
+    gene_info$dotplot_data,
+    gene
+  )
+
+  print(casc_gini)
+}
+```
+
+# Epithetial lncRNAs
+```{r}
+# Load GENCODE annotation
+gencode <- read.table(
+  file.path(data_dir, "gencode_v49_compatible.txt"),
+  header = TRUE,
+  sep = "\t",
+  stringsAsFactors = FALSE
+)
+
+# Prepare lncRNA gene list
+lnc_genes <- prepare_epithelial_lnc_analysis(obj, gencode)
+
+# DotPlot expression for lncRNAs
+lnc_percent <- DotPlot(obj, features = lnc_genes)$data
+
+# Differential expression in epithelial cells
+M <- run_epithelial_markers(obj, lnc_genes)
+
+# Filter DotPlot using significant markers
+lnc_percent2 <- filter_dotplot_by_markers(
+  lnc_percent,
+  M,
+  # CRITICITÀ: ordine e label sono specifici del CRC; per altri tumori/dataset
+  # possono produrre livelli NA o grafici incompleti. Rendere questo parametro
+  # configurabile per progetto.
+  cell_order = c(
+    "B cells",
+    "Epithelial cells",
+    "Mast cells",
+    "Myeloids",
+    "Stromal cells",
+    "T cells"
+  )
+)
+```
+
+# Epithelial lncRNA visualization + TCGA integration
+
+
+```{r}
+# 1C - Example epithelial lncRNA density plot
+obj_umap <- readRDS(file.path(out_dir, "merged_normalized_hvgs.rds"))
+
+example_gene <- select_example_gene(
+  obj = obj,
+  gene = "CASC19",
+  fallback_genes = rownames(M)
+)
+
+Nebulosa::plot_density(obj_umap, features = example_gene)
+
+# 1D - Expression across cell types
+plot_lnc_boxplot(
+  lnc_percent2,
+  palette = kelly()[c(3,7,4,5,6,8)]
+)
+```
+
+# Integration with TCGA data
+We accessed the COAD TCGA data via the GEPIA2 webserver and performed differential expression analysis between tumor and normal samples.
+
+```{r}
+# 2A - TCGA overlap analysis
+tcga <- prepare_tcga_overlap(
+  tcga_file = file.path(data_dir, "coad.tcga.txt"),
+  gencode = gencode,
+  marker_genes = rownames(M)
+)
+
+ggvenn(
+  tcga$x,
+  fill_color = c(viridis::viridis(11)[c(11,1)], kelly()[7]),
+  show_percentage = FALSE,
+  stroke_size = 0.5,
+  set_name_size = 4,
+  fill_alpha = 0.85
+) +
+  ggtitle("TCGA - Epithelial lncRNAs overlap") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+
+# 2B - TCGA DEGs barplot
+plot_tcga_barplot(tcga$COAD)
+
+# 2C - TCGA scatter tumor vs normal
+plot_tcga_scatter(
+  tcga$COAD,
+  color = kelly()[7]
+)
+```
