@@ -692,238 +692,416 @@ compute_gene_gini_single <- function(dotplot_data, gene) {
 }
 
 # ------------------------------------------------------------------------------
-# FUNCTION: prepare_epithelial_lnc_analysis
+# FUNCTION: plot_gene_density_umap
 # ------------------------------------------------------------------------------
-# Extract lncRNA genes from GENCODE annotation that are present in the dataset.
-#
-# This function:
-# - filters GENCODE for lncRNA genes
-# - keeps only genes present in the Seurat object
-# - returns clean gene vector for downstream analysis
+# Visualize the expression density of a gene on an existing UMAP.
 #
 # INPUT:
-# - obj: Seurat object
-# - gencode: annotation data.frame
+# - obj: Seurat object containing normalized data and a UMAP reduction
+# - gene: gene to visualize
+# - reduction: dimensional reduction used for the plot
 #
 # OUTPUT:
-# - character vector of lncRNA genes
+# - Nebulosa density plot
 # ------------------------------------------------------------------------------
-prepare_epithelial_lnc_analysis <- function(obj, gencode) {
 
-  lnc <- gencode[gencode$type == "lncRNA", ]
-  lnc <- lnc[lnc$SYMBOL %in% rownames(obj), ]
-
-  unique(lnc$SYMBOL)
+plot_gene_density_umap <- function(
+    obj,
+    gene,
+    reduction = "umap"
+) {
+  
+  if (!gene %in% rownames(obj)) {
+    stop(
+      "Gene not found in the Seurat object: ",
+      gene
+    )
+  }
+  
+  available_reductions <- SeuratObject::Reductions(obj)
+  
+  if (!reduction %in% available_reductions) {
+    stop(
+      "Reduction '",
+      reduction,
+      "' not found. Available reductions: ",
+      paste(available_reductions, collapse = ", ")
+    )
+  }
+  
+  density_plot <- Nebulosa::plot_density(
+    obj,
+    features = gene,
+    reduction = reduction
+  )
+  
+  return(density_plot)
 }
 
 # ------------------------------------------------------------------------------
-# FUNCTION: run_epithelial_markers
+# FUNCTION: validate_grn_metadata
 # ------------------------------------------------------------------------------
-# Perform differential expression analysis for epithelial cells.
-#
-# This function:
-# - ensures correct Seurat layer structure
-# - sets cell identity to Cell_type
-# - runs FindMarkers for epithelial cells
-# - filters significant genes (adjusted p-value < 0.01)
+# Validate metadata columns required for GRN analysis.
 #
 # INPUT:
 # - obj: Seurat object
-# - genes: vector of genes to test
-# - epithelial_label: name of epithelial population
+# - config: GRN configuration list
 #
 # OUTPUT:
-# - filtered FindMarkers result (significant genes only)
+# - data.frame reporting missing values for each required metadata column
 # ------------------------------------------------------------------------------
-run_epithelial_markers <- function(obj, genes, epithelial_label = "Epithelial cells") {
 
-  obj <- JoinLayers(obj)
-  Idents(obj) <- "Cell_type"
+validate_grn_metadata <- function(obj, config) {
+  
+  required_config <- c(
+    "cell_type_col",
+    "epithelial_label",
+    "patient_col",
+    "sample_col",
+    "dataset_col",
+    "condition_col"
+  )
+  
+  missing_config <- setdiff(required_config, names(config))
+  
+  if (length(missing_config) > 0L) {
+    stop(
+      "Missing GRN configuration entries: ",
+      paste(missing_config, collapse = ", ")
+    )
+  }
+  
+  metadata <- obj@meta.data
+  
+  required_columns <- unlist(
+    config[c(
+      "cell_type_col",
+      "patient_col",
+      "sample_col",
+      "dataset_col",
+      "condition_col"
+    )],
+    use.names = FALSE
+  )
+  
+  missing_columns <- setdiff(
+    required_columns,
+    colnames(metadata)
+  )
+  
+  if (length(missing_columns) > 0L) {
+    stop(
+      "Missing metadata columns: ",
+      paste(missing_columns, collapse = ", ")
+    )
+  }
+  
+  cell_types <- unique(
+    as.character(metadata[[config$cell_type_col]])
+  )
+  
+  if (!config$epithelial_label %in% cell_types) {
+    stop(
+      "Epithelial label not found in metadata: ",
+      config$epithelial_label
+    )
+  }
+  
+  missing_summary <- data.frame(
+    column = required_columns,
+    missing_values = vapply(
+      required_columns,
+      function(column) {
+        sum(
+          is.na(metadata[[column]]) |
+            trimws(as.character(metadata[[column]])) == ""
+        )
+      },
+      integer(1)
+    ),
+    stringsAsFactors = FALSE
+  )
+  
+  return(missing_summary)
+}
 
-  M <- FindMarkers(
+# ------------------------------------------------------------------------------
+# FUNCTION: summarize_epithelial_samples
+# ------------------------------------------------------------------------------
+# Summarize epithelial cell counts by dataset, patient, sample, and condition.
+#
+# INPUT:
+# - obj: Seurat object
+# - config: GRN configuration list
+#
+# OUTPUT:
+# - data.frame with the number of epithelial cells in each sample
+# ------------------------------------------------------------------------------
+
+summarize_epithelial_samples <- function(obj, config) {
+  
+  metadata <- obj@meta.data
+  
+  epithelial_metadata <- metadata[
+    as.character(metadata[[config$cell_type_col]]) ==
+      config$epithelial_label,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(epithelial_metadata) == 0L) {
+    stop(
+      "No cells found for: ",
+      config$epithelial_label
+    )
+  }
+  
+  grouping_columns <- c(
+    config$dataset_col,
+    config$patient_col,
+    config$sample_col,
+    config$condition_col
+  )
+  
+  if (
+    "status_col" %in% names(config) &&
+    config$status_col %in% colnames(epithelial_metadata)
+  ) {
+    grouping_columns <- c(
+      grouping_columns,
+      config$status_col
+    )
+  }
+  
+  grouped_metadata <- dplyr::group_by(
+    epithelial_metadata,
+    dplyr::across(dplyr::all_of(grouping_columns))
+  )
+  
+  sample_summary <- dplyr::summarise(
+    grouped_metadata,
+    n_epithelial_cells = dplyr::n(),
+    .groups = "drop"
+  )
+  
+  sample_summary <- as.data.frame(sample_summary)
+  
+  sample_summary <- sample_summary[
+    do.call(
+      order,
+      sample_summary[grouping_columns]
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  rownames(sample_summary) <- NULL
+  
+  return(sample_summary)
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: select_grn_cells
+# ------------------------------------------------------------------------------
+# Select cells required for GRN analysis and assign a pseudobulk group.
+#
+# INPUT:
+# - obj: Seurat object
+# - config: GRN configuration list
+# - group_col: name of the new pseudobulk grouping column
+#
+# OUTPUT:
+# - filtered Seurat object containing only the selected cells
+# ------------------------------------------------------------------------------
+
+select_grn_cells <- function(
+    obj,
+    config,
+    group_col = "GRN_pseudobulk_id"
+) {
+  
+  metadata <- obj@meta.data
+  
+  required_columns <- unique(c(
+    config$cell_type_col,
+    config$condition_col,
+    config$pseudobulk_group_columns
+  ))
+  
+  missing_columns <- setdiff(
+    required_columns,
+    colnames(metadata)
+  )
+  
+  if (length(missing_columns) > 0L) {
+    stop(
+      "Missing metadata columns: ",
+      paste(missing_columns, collapse = ", ")
+    )
+  }
+  
+  cells_to_keep <- rownames(metadata)[
+    as.character(metadata[[config$cell_type_col]]) ==
+      config$epithelial_label &
+      as.character(metadata[[config$condition_col]]) ==
+      config$target_condition
+  ]
+  
+  if (length(cells_to_keep) == 0L) {
+    stop(
+      "No cells found for cell type '",
+      config$epithelial_label,
+      "' and condition '",
+      config$target_condition,
+      "'"
+    )
+  }
+  
+  grn_obj <- obj[, cells_to_keep]
+  
+  selected_metadata <- grn_obj@meta.data
+  
+  invalid_group_values <- vapply(
+    config$pseudobulk_group_columns,
+    function(column) {
+      any(
+        is.na(selected_metadata[[column]]) |
+          trimws(as.character(selected_metadata[[column]])) == ""
+      )
+    },
+    logical(1)
+  )
+  
+  if (any(invalid_group_values)) {
+    stop(
+      "Missing values found in pseudobulk grouping columns: ",
+      paste(
+        config$pseudobulk_group_columns[invalid_group_values],
+        collapse = ", "
+      )
+    )
+  }
+  
+  pseudobulk_id <- do.call(
+    paste,
+    c(
+      selected_metadata[
+        config$pseudobulk_group_columns
+      ],
+      sep = "__"
+    )
+  )
+  
+  grn_obj[[group_col]] <- pseudobulk_id
+  
+  return(grn_obj)
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: prepare_grn_counts
+# ------------------------------------------------------------------------------
+# Join the raw-count layers of the GRN Seurat object.
+#
+# INPUT:
+# - obj: Seurat object containing the selected GRN cells
+# - assay: assay containing raw counts
+#
+# OUTPUT:
+# - Seurat object with a single joined counts layer
+# ------------------------------------------------------------------------------
+
+prepare_grn_counts <- function(
+    obj,
+    assay = "RNA"
+) {
+  
+  if (!assay %in% SeuratObject::Assays(obj)) {
+    stop("Assay not found in Seurat object: ", assay)
+  }
+  
+  SeuratObject::DefaultAssay(obj) <- assay
+  
+  count_layers <- SeuratObject::Layers(
+    obj[[assay]],
+    search = "^counts"
+  )
+  
+  if (length(count_layers) == 0L) {
+    stop("No counts layer found in assay: ", assay)
+  }
+  
+  if (length(count_layers) > 1L) {
+    obj <- SeuratObject::JoinLayers(
+      object = obj,
+      assay = assay
+    )
+  }
+  
+  return(obj)
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: aggregate_grn_pseudobulk
+# ------------------------------------------------------------------------------
+# Aggregate raw gene counts by pseudobulk group.
+#
+# INPUT:
+# - obj: Seurat object containing the selected GRN cells
+# - assay: assay containing the raw counts
+# - group_col: metadata column defining the pseudobulk groups
+#
+# OUTPUT:
+# - sparse matrix with genes as rows and pseudobulk samples as columns
+# ------------------------------------------------------------------------------
+
+aggregate_grn_pseudobulk <- function(
+    obj,
+    assay = "RNA",
+    group_col = "GRN_pseudobulk_id"
+) {
+  
+  if (!assay %in% SeuratObject::Assays(obj)) {
+    stop("Assay not found in Seurat object: ", assay)
+  }
+  
+  if (!group_col %in% colnames(obj@meta.data)) {
+    stop("Pseudobulk grouping column not found: ", group_col)
+  }
+  
+  available_layers <- SeuratObject::Layers(
+    obj[[assay]]
+  )
+  
+  if (!"counts" %in% available_layers) {
+    stop(
+      "A single 'counts' layer was not found. ",
+      "Run prepare_grn_counts() first."
+    )
+  }
+  
+  counts <- SeuratObject::LayerData(
     object = obj,
-    ident.1 = epithelial_label,
-    only.pos = TRUE,
-    min.pct = 0,
-    logfc.threshold = 0,
-    features = genes
+    assay = assay,
+    layer = "counts"
   )
-
-  M <- subset(M, p_val_adj < 0.01)
-
-  return(M)
-}
-
-# ------------------------------------------------------------------------------
-# FUNCTION: filter_dotplot_by_markers
-# ------------------------------------------------------------------------------
-# Filter DotPlot data using significant marker genes.
-#
-# This function:
-# - subsets DotPlot output for selected genes
-# - optionally orders cell types for consistent plotting
-#
-# INPUT:
-# - dotplot_data: Seurat DotPlot output
-# - markers: FindMarkers result
-# - cell_order: optional factor ordering for cell types
-#
-# OUTPUT:
-# - filtered DotPlot data.frame
-# ------------------------------------------------------------------------------
-filter_dotplot_by_markers <- function(dotplot_data, markers, cell_order = NULL) {
-
-  df <- subset(dotplot_data, features.plot %in% rownames(markers))
-
-  if (!is.null(cell_order)) {
-    df$id <- factor(df$id, levels = cell_order)
-  }
-
-  return(df)
-}
-
-# ------------------------------------------------------------------------------
-# FUNCTION: select_example_gene
-# ------------------------------------------------------------------------------
-# Select a representative gene for visualization.
-#
-# Logic:
-# - uses a predefined gene if present in dataset
-# - otherwise falls back to first gene from marker list
-#
-# INPUT:
-# - obj: Seurat object
-# - gene: preferred gene name
-# - fallback_genes: vector of candidate genes
-#
-# OUTPUT:
-# - selected gene name
-# ------------------------------------------------------------------------------
-select_example_gene <- function(obj, gene = "LINC00523", fallback_genes = NULL) {
-
-  if (gene %in% rownames(obj[["RNA"]])) {
-    return(gene)
-  } else {
-    return(fallback_genes[1])
-  }
-}
-
-# ------------------------------------------------------------------------------
-# FUNCTION: plot_lnc_boxplot
-# ------------------------------------------------------------------------------
-# Boxplot of scaled expression across cell types.
-#
-# INPUT:
-# - df: DotPlot-derived dataframe
-# - palette: color vector
-#
-# OUTPUT:
-# - ggplot object
-# ------------------------------------------------------------------------------
-plot_lnc_boxplot <- function(df, palette) {
-
-  ggplot(df, aes(x = reorder(id, avg.exp.scaled),
-                 y = avg.exp.scaled,
-                 fill = id)) +
-    geom_boxplot() +
-    coord_flip() +
-    scale_fill_manual(values = palette) +
-    theme_bw() +
-    theme(legend.position = "none") +
-    ylab("Expression (Scaled)") +
-    xlab("Cell Type")
-}
-
-# ------------------------------------------------------------------------------
-# FUNCTION: prepare_tcga_overlap
-# ------------------------------------------------------------------------------
-# Prepare TCGA dataset for overlap analysis.
-#
-# INPUT:
-# - tcga_file: path to TCGA table
-# - gencode: annotation table
-# - marker_genes: epithelial marker genes
-#
-# OUTPUT:
-# - list with filtered TCGA table and gene sets
-# ------------------------------------------------------------------------------
-prepare_tcga_overlap <- function(tcga_file, gencode, marker_genes) {
-
-  COAD <- read.table(tcga_file, header = TRUE)
-
-  lnc <- gencode[gencode$type == "lncRNA", ]
-
-  COAD <- COAD[COAD$Gene %in% lnc$SYMBOL, ]
-
-  x <- list(
-    COAD$Gene[COAD$log2FC > 0],
-    COAD$Gene[COAD$log2FC < 0],
-    marker_genes
+  
+  pseudobulk_groups <- as.character(
+    obj@meta.data[colnames(counts), group_col]
   )
-
-  names(x) <- c("TCGA-Up", "TCGA-Down", "Epithelial")
-
-  list(COAD = COAD, x = x)
-}
-
-# ------------------------------------------------------------------------------
-# FUNCTION: plot_tcga_barplot
-# ------------------------------------------------------------------------------
-# Barplot of TCGA differential expression results.
-#
-# INPUT:
-# - COAD: filtered TCGA dataframe
-#
-# OUTPUT:
-# - ggplot object
-# ------------------------------------------------------------------------------
-plot_tcga_barplot <- function(COAD) {
-
-  ggplot(COAD, aes(x = reorder(Gene, log2FC),
-                   y = log2FC,
-                   fill = log2FC)) +
-    geom_bar(stat = "identity") +
-    coord_flip() +
-    scale_fill_gradient2(
-      midpoint = 0,
-      low = viridis::viridis(3)[1],
-      high = viridis::viridis(3)[3]
-    ) +
-    theme_bw() +
-    xlab("LncRNAs") +
-    theme(
-      legend.position = "none",
-      axis.text.y = element_text(size = 6)
-    )
-}
-
-# ------------------------------------------------------------------------------
-# FUNCTION: plot_tcga_scatter
-# ------------------------------------------------------------------------------
-# Scatter plot Tumor vs Normal expression (TCGA).
-#
-# INPUT:
-# - COAD: TCGA dataframe
-# - color: label color
-#
-# OUTPUT:
-# - ggplot object
-# ------------------------------------------------------------------------------
-plot_tcga_scatter <- function(COAD, color) {
-
-  ggplot(COAD, aes(x = log(Tumor + 0.001),
-                   y = log(Normal + 0.001))) +
-    geom_point() +
-    theme_bw() +
-    ylab("log(Normal Expression)") +
-    xlab("log(Tumor Expression)") +
-    ggrepel::geom_label_repel(
-      nudge_y = 3,
-      nudge_x = 0.5,
-      color = color,
-      fill = "white",
-      max.overlaps = 100000,
-      size = 2,
-      label = ifelse(COAD$Normal == 0, COAD$Gene, "")
-    )
+  
+  if (anyNA(pseudobulk_groups) || any(trimws(pseudobulk_groups) == "")) {
+    stop("Missing values found in pseudobulk group assignments")
+  }
+  
+  group_matrix <- Matrix::sparse.model.matrix(
+    ~ 0 + factor(pseudobulk_groups)
+  )
+  
+  colnames(group_matrix) <- levels(
+    factor(pseudobulk_groups)
+  )
+  
+  pseudobulk_counts <- counts %*% group_matrix
+  
+  return(pseudobulk_counts)
 }

@@ -32,8 +32,8 @@ library(stringr)
 library(DescTools)
 library(scales)
 library(ggplot2)
-library(ggvenn)
-library(pals)
+# library(ggvenn)
+# library(pals)
 library(ggpubr)
 library(ggrepel)
 library(Nebulosa)
@@ -316,6 +316,7 @@ plot_gini_results(GiniCoef_clean, lnc_n, prot_n)
 ```
 
 # Check Single Gene (CASC19)
+
 ```{r}
 gene <- "CASC19"
 
@@ -343,98 +344,145 @@ if (!gene_info$present) {
     gene
   )
 
-  print(casc_gini)
+  casc_gini
 }
 ```
 
-# Epithetial lncRNAs
+# CASC19 Expression Density on UMAP
+
 ```{r}
-# Load GENCODE annotation
-gencode <- read.table(
-  file.path(data_dir, "gencode_v49_compatible.txt"),
-  header = TRUE,
-  sep = "\t",
-  stringsAsFactors = FALSE
+obj_umap <- readRDS(
+  file.path(out_dir, "merged_normalized_hvgs.rds")
 )
 
-# Prepare lncRNA gene list
-lnc_genes <- prepare_epithelial_lnc_analysis(obj, gencode)
-
-# DotPlot expression for lncRNAs
-lnc_percent <- DotPlot(obj, features = lnc_genes)$data
-
-# Differential expression in epithelial cells
-M <- run_epithelial_markers(obj, lnc_genes)
-
-# Filter DotPlot using significant markers
-lnc_percent2 <- filter_dotplot_by_markers(
-  lnc_percent,
-  M,
-  # CRITICITÀ: ordine e label sono specifici del CRC; per altri tumori/dataset
-  # possono produrre livelli NA o grafici incompleti. Rendere questo parametro
-  # configurabile per progetto.
-  cell_order = c(
-    "B cells",
-    "Epithelial cells",
-    "Mast cells",
-    "Myeloids",
-    "Stromal cells",
-    "T cells"
-  )
+casc19_density_plot <- plot_gene_density_umap(
+  obj = obj_umap,
+  gene = "CASC19"
 )
+
+casc19_density_plot
 ```
 
-# Epithelial lncRNA visualization + TCGA integration
-
+# GRN Analysis Configuration
 
 ```{r}
-# 1C - Example epithelial lncRNA density plot
-obj_umap <- readRDS(file.path(out_dir, "merged_normalized_hvgs.rds"))
+obj <- readRDS(file.path(out_dir, "merged_seurat_qc.rds"))
+grn_config <- list(
+  assay = "RNA",
+  cell_type_col = "Cell_type",
+  epithelial_label = "Epithelial cells",
+  patient_col = "Patient",
+  sample_col = "Sample",
+  dataset_col = "GSE",
+  condition_col = "Class",
+  status_col = "Status",
+  target_condition = "Tumor",
+  pseudobulk_group_columns = c("GSE", "Patient"),
+  correlation_method = "spearman",
+  random_seed = 1234
+)
 
-example_gene <- select_example_gene(
+grn_out_dir <- file.path(out_dir, "GRN")
+
+dir.create(
+  grn_out_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+set.seed(grn_config$random_seed)
+```
+
+# GRN Metadata Validation
+
+```{r}
+grn_metadata_validation <- validate_grn_metadata(
   obj = obj,
-  gene = "CASC19",
-  fallback_genes = rownames(M)
+  config = grn_config
 )
 
-Nebulosa::plot_density(obj_umap, features = example_gene)
-
-# 1D - Expression across cell types
-plot_lnc_boxplot(
-  lnc_percent2,
-  palette = kelly()[c(3,7,4,5,6,8)]
-)
+grn_metadata_validation
 ```
 
-# Integration with TCGA data
-We accessed the COAD TCGA data via the GEPIA2 webserver and performed differential expression analysis between tumor and normal samples.
+# Epithelial Sample Structure Validation
 
 ```{r}
-# 2A - TCGA overlap analysis
-tcga <- prepare_tcga_overlap(
-  tcga_file = file.path(data_dir, "coad.tcga.txt"),
-  gencode = gencode,
-  marker_genes = rownames(M)
+epithelial_sample_summary <- summarize_epithelial_samples(
+  obj = obj,
+  config = grn_config
 )
 
-ggvenn(
-  tcga$x,
-  fill_color = c(viridis::viridis(11)[c(11,1)], kelly()[7]),
-  show_percentage = FALSE,
-  stroke_size = 0.5,
-  set_name_size = 4,
-  fill_alpha = 0.85
-) +
-  ggtitle("TCGA - Epithelial lncRNAs overlap") +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+epithelial_sample_summary
+```
 
+# Epithelial Tumor Cell Selection
 
-# 2B - TCGA DEGs barplot
-plot_tcga_barplot(tcga$COAD)
+```{r}
+grn_obj <- select_grn_cells(
+  obj = obj,
+  config = grn_config
+)
 
-# 2C - TCGA scatter tumor vs normal
-plot_tcga_scatter(
-  tcga$COAD,
-  color = kelly()[7]
+dim(grn_obj)
+
+table(
+  grn_obj[[grn_config$cell_type_col]][, 1],
+  useNA = "ifany"
+)
+
+table(
+  grn_obj[[grn_config$condition_col]][, 1],
+  useNA = "ifany"
 )
 ```
+
+# Patient-Level Cell Count Quality Control
+
+```{r}
+grn_patient_cell_counts <- sort(
+  table(grn_obj$GRN_pseudobulk_id),
+  decreasing = TRUE
+)
+
+grn_patient_cell_counts
+
+length(grn_patient_cell_counts)
+```
+
+# Epithelial Pseudobulk Aggregation
+
+```{r}
+SeuratObject::Layers(
+  grn_obj[[grn_config$assay]]
+)
+
+grn_obj <- prepare_grn_counts(
+  obj = grn_obj,
+  assay = grn_config$assay
+)
+
+SeuratObject::Layers(
+  grn_obj[[grn_config$assay]]
+)
+
+grn_pseudobulk_counts <- aggregate_grn_pseudobulk(
+  obj = grn_obj,
+  assay = grn_config$assay,
+  group_col = "GRN_pseudobulk_id"
+)
+
+dim(grn_pseudobulk_counts)
+```
+
+# Pseudobulk Matrix Validation
+# Pseudobulk Normalization
+# GRN Gene Set Preparation
+# GRN Expression Filtering
+# Spearman Correlation Analysis
+# Correlation Network Filtering
+# GENIE3 Network Inference
+# Spearman and GENIE3 Integration
+# GRN Construction
+# GRN Hub Analysis
+# GRN Visualization
+# GRN Results Export
