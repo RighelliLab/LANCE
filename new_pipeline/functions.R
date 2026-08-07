@@ -1105,3 +1105,308 @@ aggregate_grn_pseudobulk <- function(
   
   return(pseudobulk_counts)
 }
+
+# ------------------------------------------------------------------------------
+# FUNCTION: validate_grn_pseudobulk
+# ------------------------------------------------------------------------------
+# Validate the pseudobulk count matrix after aggregation.
+#
+# Checks:
+# - matrix dimensions
+# - pseudobulk sample names
+# - duplicated gene/sample names
+# - missing or negative values
+# - consistency with expected pseudobulk groups
+#
+# INPUT:
+# - pseudobulk_counts: genes x pseudobulk raw-count matrix
+# - obj: Seurat object used for pseudobulk aggregation
+# - group_col: metadata column defining pseudobulk groups
+#
+# OUTPUT:
+# - data.frame summarizing validation results
+# ------------------------------------------------------------------------------
+
+validate_grn_pseudobulk <- function(
+    pseudobulk_counts,
+    obj,
+    group_col = "GRN_pseudobulk_id"
+) {
+  
+  if (!group_col %in% colnames(obj@meta.data)) {
+    stop("Pseudobulk grouping column not found: ", group_col)
+  }
+  
+  expected_groups <- sort(
+    unique(as.character(obj@meta.data[[group_col]]))
+  )
+  
+  observed_groups <- sort(
+    colnames(pseudobulk_counts)
+  )
+  
+  validation <- data.frame(
+    check = c(
+      "number_of_genes",
+      "number_of_pseudobulk_samples",
+      "expected_number_of_pseudobulk_samples",
+      "duplicated_gene_names",
+      "duplicated_pseudobulk_names",
+      "missing_values",
+      "negative_values",
+      "group_names_match"
+    ),
+    value = c(
+      nrow(pseudobulk_counts),
+      ncol(pseudobulk_counts),
+      length(expected_groups),
+      anyDuplicated(rownames(pseudobulk_counts)),
+      anyDuplicated(colnames(pseudobulk_counts)),
+      sum(is.na(pseudobulk_counts)),
+      sum(pseudobulk_counts < 0),
+      identical(expected_groups, observed_groups)
+    ),
+    stringsAsFactors = FALSE
+  )
+  
+  return(validation)
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: normalize_grn_pseudobulk
+# ------------------------------------------------------------------------------
+# Normalize pseudobulk raw counts using TMM normalization and log-CPM.
+#
+# INPUT:
+# - pseudobulk_counts: genes x pseudobulk raw-count matrix
+#
+# OUTPUT:
+# - list containing:
+#   - logcpm: normalized log-CPM expression matrix
+#   - norm_factors: TMM normalization factors
+#   - library_sizes: raw library sizes
+# ------------------------------------------------------------------------------
+
+normalize_grn_pseudobulk <- function(pseudobulk_counts) {
+  
+  if (!requireNamespace("edgeR", quietly = TRUE)) {
+    stop("Package 'edgeR' is required for pseudobulk normalization")
+  }
+  
+  if (anyNA(pseudobulk_counts)) {
+    stop("Pseudobulk count matrix contains missing values")
+  }
+  
+  if (any(pseudobulk_counts < 0)) {
+    stop("Pseudobulk count matrix contains negative values")
+  }
+  
+  y <- edgeR::DGEList(
+    counts = pseudobulk_counts
+  )
+  
+  y <- edgeR::normLibSizes(
+    y,
+    method = "TMM"
+  )
+  
+  logcpm <- edgeR::cpm(
+    y,
+    log = TRUE,
+    prior.count = 1
+  )
+  
+  return(list(
+    logcpm = logcpm,
+    norm_factors = y$samples$norm.factors,
+    library_sizes = y$samples$lib.size
+  ))
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: prepare_grn_gene_sets
+# ------------------------------------------------------------------------------
+# Prepare lncRNA and protein-coding gene sets for GRN analysis.
+#
+# INPUT:
+# - expression_matrix: genes x pseudobulk normalized expression matrix
+# - gencode: GENCODE annotation data.frame containing SYMBOL and type
+#
+# OUTPUT:
+# - list containing:
+#   - lnc: lncRNA genes present in the pseudobulk matrix
+#   - prot: protein-coding genes present in the pseudobulk matrix
+#   - ambiguous: genes assigned to lncRNA and removed from protein-coding
+#   - all: combined non-overlapping GRN gene set
+# ------------------------------------------------------------------------------
+
+prepare_grn_gene_sets <- function(
+    expression_matrix,
+    gencode
+) {
+  
+  if (is.null(rownames(expression_matrix))) {
+    stop("Expression matrix has no gene names")
+  }
+  
+  if (!all(c("SYMBOL", "type") %in% colnames(gencode))) {
+    stop("GENCODE annotation must contain SYMBOL and type columns")
+  }
+  
+  genes <- rownames(expression_matrix)
+  
+  lnc_raw <- intersect(
+    genes,
+    unique(gencode$SYMBOL[gencode$type == "lncRNA"])
+  )
+  
+  prot_raw <- intersect(
+    genes,
+    unique(gencode$SYMBOL[gencode$type == "protein_coding"])
+  )
+  
+  ambiguous_genes <- intersect(
+    lnc_raw,
+    prot_raw
+  )
+  
+  lnc_features <- unique(lnc_raw)
+  
+  prot_features <- setdiff(
+    unique(prot_raw),
+    ambiguous_genes
+  )
+  
+  if (length(intersect(lnc_features, prot_features)) > 0L) {
+    stop("lncRNA and protein-coding GRN gene sets are not disjoint")
+  }
+  
+  all_features <- c(
+    lnc_features,
+    prot_features
+  )
+  
+  return(list(
+    lnc = lnc_features,
+    prot = prot_features,
+    ambiguous = ambiguous_genes,
+    all = all_features
+  ))
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: calculate_grn_expression_statistics
+# ------------------------------------------------------------------------------
+# Calculate gene-level expression statistics for pseudobulk samples.
+#
+# INPUT:
+# - expression_matrix: normalized pseudobulk expression matrix (logCPM)
+# - count_matrix: raw pseudobulk count matrix
+#
+# OUTPUT:
+# - data.frame containing:
+#   - gene: gene symbol
+#   - mean_logcpm: mean normalized expression across pseudobulk samples
+#   - median_logcpm: median normalized expression across pseudobulk samples
+#   - n_detected_pseudobulk: number of pseudobulk samples with raw counts > 0
+# ------------------------------------------------------------------------------
+
+calculate_grn_expression_statistics <- function(
+    expression_matrix,
+    count_matrix
+) {
+  
+  if (!all(dim(expression_matrix) == dim(count_matrix))) {
+    stop(
+      "Expression and count matrices must have identical dimensions"
+    )
+  }
+  
+  if (!identical(
+    rownames(expression_matrix),
+    rownames(count_matrix)
+  )) {
+    stop(
+      "Gene names do not match between expression and count matrices"
+    )
+  }
+  
+  expression_statistics <- data.frame(
+    gene = rownames(expression_matrix),
+    
+    mean_logcpm = rowMeans(
+      expression_matrix
+    ),
+    
+    median_logcpm = apply(
+      expression_matrix,
+      1,
+      median
+    ),
+    
+    n_detected_pseudobulk = rowSums(
+      count_matrix > 0
+    ),
+    
+    stringsAsFactors = FALSE
+  )
+  
+  return(expression_statistics)
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: plot_grn_expression_distribution
+# ------------------------------------------------------------------------------
+# Visualize gene expression statistics across pseudobulk samples.
+#
+# INPUT:
+# - expression_statistics: data.frame generated by
+#   calculate_grn_expression_statistics()
+#
+# OUTPUT:
+# - list containing:
+#   - mean_logcpm: histogram of mean logCPM
+#   - detected_pseudobulk: histogram of detected pseudobulk samples
+# ------------------------------------------------------------------------------
+
+plot_grn_expression_distribution <- function(
+    expression_statistics
+) {
+  
+  mean_logcpm_plot <- ggplot(
+    expression_statistics,
+    aes(x = mean_logcpm)
+  ) +
+    geom_histogram(
+      bins = 50,
+      color = "black",
+      fill = "#4E79A7"
+    ) +
+    labs(
+      x = "Mean logCPM",
+      y = "Number of genes",
+      title = "Distribution of Mean Gene Expression"
+    ) +
+    theme_classic()
+  
+  detected_pseudobulk_plot <- ggplot(
+    expression_statistics,
+    aes(x = n_detected_pseudobulk)
+  ) +
+    geom_histogram(
+      binwidth = 1,
+      color = "black",
+      fill = "#E15759"
+    ) +
+    labs(
+      x = "Detected pseudobulk samples",
+      y = "Number of genes",
+      title = "Distribution of Gene Detection"
+    ) +
+    theme_classic()
+  
+  return(list(
+    mean_logcpm = mean_logcpm_plot,
+    detected_pseudobulk = detected_pseudobulk_plot
+  ))
+}

@@ -475,9 +475,119 @@ dim(grn_pseudobulk_counts)
 ```
 
 # Pseudobulk Matrix Validation
+
+```{r}
+grn_pseudobulk_validation <- validate_grn_pseudobulk(
+  pseudobulk_counts = grn_pseudobulk_counts,
+  obj = grn_obj,
+  group_col = "GRN_pseudobulk_id"
+)
+
+grn_pseudobulk_validation
+```
+
 # Pseudobulk Normalization
+
+```{r}
+grn_pseudobulk_normalized <- normalize_grn_pseudobulk(
+  pseudobulk_counts = grn_pseudobulk_counts
+)
+
+grn_pseudobulk_logcpm <- grn_pseudobulk_normalized$logcpm
+
+dim(grn_pseudobulk_logcpm)
+
+grn_pseudobulk_normalized$norm_factors
+```
+
 # GRN Gene Set Preparation
+
+```{r}
+gencode <- read.table(
+  file.path(data_dir, "gencode_v49_compatible.txt"),
+  header = TRUE
+)
+
+grn_gene_sets <- prepare_grn_gene_sets(
+  expression_matrix = grn_pseudobulk_logcpm,
+  gencode = gencode
+)
+
+length(grn_gene_sets$lnc)
+length(grn_gene_sets$prot)
+length(grn_gene_sets$ambiguous)
+length(grn_gene_sets$all)
+
+length(
+  intersect(
+    grn_gene_sets$lnc,
+    grn_gene_sets$prot
+  )
+)
+```
+
 # GRN Expression Filtering
+
+## STEP 1: Calculate Expression Statistics
+Objective:
+- summarize gene expression across pseudobulk samples
+- inspect the expression distribution
+- support an informed choice of filtering thresholds
+
+No genes are removed at this stage.
+
+```{r}
+grn_expression_qc <- calculate_grn_expression_statistics(
+  expression_matrix = grn_pseudobulk_logcpm,
+  count_matrix = grn_pseudobulk_counts
+)
+
+summary(grn_expression_qc$mean_logcpm)
+
+summary(grn_expression_qc$median_logcpm)
+
+summary(grn_expression_qc$n_detected_pseudobulk)
+```
+
+## STEP 2: Inspect Expression Distribution
+Objective:
+
+- visualize gene expression across pseudobulk samples
+- identify genes with very low detection
+- support the selection of filtering thresholds
+
+No filtering is applied at this stage.
+
+```{r}
+grn_expression_plots <- plot_grn_expression_distribution(
+  expression_statistics = grn_expression_qc
+)
+
+grn_expression_plots$mean_logcpm
+
+grn_expression_plots$detected_pseudobulk
+```
+
+## STEP 3: Select Filtering Thresholds
+Objective:
+
+- define expression-based filtering criteria for GRN construction
+
+The initial GRN analysis is performed without expression filtering.
+
+Filtering thresholds will be defined after validating the unfiltered GRN
+workflow and evaluating the impact of expression filtering on lncRNA
+representation.
+
+## STEP 4: Apply Expression Filtering
+Objective:
+
+- remove lowly expressed genes according to the selected thresholds
+
+Expression filtering will be applied after validating the unfiltered GRN
+workflow, allowing a direct comparison between filtered and unfiltered
+networks.
+
 # Spearman Correlation Analysis
 # Correlation Network Filtering
 # GENIE3 Network Inference
