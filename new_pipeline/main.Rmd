@@ -153,7 +153,8 @@ head(merged_obj@meta.data)
 rm(obj_list)
 gc()
 ```
-# QC Visualization (Supplementary 1A)
+
+# QC Visualization
 
 This section evaluates basic quality control metrics across datasets,
 including number of detected genes, total counts, and mitochondrial percentage.
@@ -174,7 +175,6 @@ VlnPlot(
   pt.size = 0
 )
 ```
-
 
 # Dimensionality Reduction
 
@@ -212,7 +212,7 @@ saveRDS(
 ```
 
 
-# UMAP Visualization (Supplementary 1B)
+# UMAP Visualization
 
 This section visualizes batch effects across datasets using UMAP.
 
@@ -222,6 +222,7 @@ DimPlot(obj, group.by = "GSE", cols = cols) +
 ```
 
 # Cell Type Annotation (Reference Labels)
+
 This section performs cell type visualization, data preparation for
 scMRMA, automated annotation, and validation against original labels.
 
@@ -244,7 +245,6 @@ tmp <- prepare_scrmra_input(obj)
 obj <- tmp$obj
 logcounts <- tmp$logcounts
 ```
-
   
 ## Run scMRMA Annotation
   
@@ -254,7 +254,6 @@ Perform automated cell type prediction using reference-based annotation.
 obj <- run_scrmra_annotation(obj, logcounts)
 ```
 
-  
 ## Annotation Validation
   
 Compare original annotations with scMRMA predictions.
@@ -268,7 +267,6 @@ ggplot(df, aes(x = Original, y = Fraction, fill = Validation)) +
   theme_bw() +
   coord_flip()
 ```
-
   
 # Re-check Visualization (Optional)
   
@@ -279,6 +277,7 @@ plot_cell_types(obj, "Cell_type")
 ```
 
 # Cell type specificity
+
 This section quantifies cell type specificity of lncRNAs and protein-coding genes
 using the Gini coefficient computed from DotPlot-based expression summaries.
 
@@ -529,6 +528,7 @@ length(
 # GRN Expression Filtering
 
 ## STEP 1: Calculate Expression Statistics
+
 Objective:
 - summarize gene expression across pseudobulk samples
 - inspect the expression distribution
@@ -550,6 +550,7 @@ summary(grn_expression_qc$n_detected_pseudobulk)
 ```
 
 ## STEP 2: Inspect Expression Distribution
+
 Objective:
 
 - visualize gene expression across pseudobulk samples
@@ -569,6 +570,7 @@ grn_expression_plots$detected_pseudobulk
 ```
 
 ## STEP 3: Select Filtering Thresholds
+
 Objective:
 
 - define expression-based filtering criteria for GRN construction
@@ -580,6 +582,7 @@ workflow and evaluating the impact of expression filtering on lncRNA
 representation.
 
 ## STEP 4: Apply Expression Filtering
+
 Objective:
 
 - remove lowly expressed genes according to the selected thresholds
@@ -589,10 +592,782 @@ workflow, allowing a direct comparison between filtered and unfiltered
 networks.
 
 # Spearman Correlation Analysis
+
+## STEP 1: Prepare Unfiltered GRN Expression Matrix
+
+Objective:
+
+- restrict the normalized pseudobulk matrix to lncRNA and protein-coding genes
+- preserve all GRN candidate genes before correlation analysis
+- identify genes with zero variance across pseudobulk samples
+
+No genes are removed at this stage.
+
+```{r}
+grn_correlation_input <- prepare_grn_correlation_matrix(
+  expression_matrix = grn_pseudobulk_logcpm,
+  gene_sets = grn_gene_sets
+)
+
+dim(grn_correlation_input$expression)
+
+length(grn_correlation_input$zero_variance_genes)
+
+grn_correlation_input$n_genes
+
+grn_correlation_input$n_samples
+```
+
+## STEP 2: Compute Unfiltered Spearman Correlations
+
+Objective:
+
+- compute pairwise Spearman correlations across all GRN candidate genes
+- preserve the complete gene-gene correlation matrix
+- establish the unfiltered baseline for downstream GRN construction
+
+No correlation threshold is applied at this stage.
+
+```{r}
+grn_spearman_matrix <- compute_grn_spearman_correlations(
+  expression_matrix = grn_correlation_input$expression
+)
+
+dim(grn_spearman_matrix)
+
+sum(is.na(grn_spearman_matrix))
+
+range(grn_spearman_matrix)
+
+saveRDS(grn_spearman_matrix, file.path(grn_out_dir, "grn_spearman_unfiltered.rds"))
+```
+
 # Correlation Network Filtering
+
+## STEP 1: Inspect Correlation Strength Distribution
+
+Objective:
+
+- summarize pairwise Spearman correlations across GRN candidate genes
+- quantify the number of gene pairs retained at different correlation strengths
+- support an informed choice of correlation thresholds
+
+No correlation filtering is applied at this stage.
+
+```{r}
+# grn_spearman_matrix <- readRDS(file.path(grn_out_dir, "grn_spearman_unfiltered.rds"))
+grn_correlation_summary <- summarize_grn_correlations(
+  correlation_matrix = grn_spearman_matrix
+)
+
+grn_correlation_summary$summary
+
+grn_correlation_summary$threshold_counts
+
+grn_spearman_distribution_plot <- plot_grn_spearman_distribution(
+  correlation_matrix = grn_spearman_matrix
+)
+
+grn_spearman_distribution_plot
+```
+
+## STEP 2: Inspect Correlations by Gene-Pair Type
+
+Objective:
+
+- characterize correlations according to gene-pair type
+- distinguish lncRNA-lncRNA, lncRNA-protein-coding, and protein-coding pairs
+- evaluate lncRNA representation across different correlation strengths
+
+No correlation filtering is applied at this stage.
+
+```{r}
+grn_correlation_by_type <- summarize_grn_correlations_by_gene_type(
+  correlation_matrix = grn_spearman_matrix,
+  gene_sets = grn_gene_sets
+)
+
+grn_correlation_by_type
+```
+
+## STEP 3: Inspect Correlation Structure by Gene Detection
+
+Objective:
+
+- evaluate whether strong correlations are associated with low gene detection
+- compare detection patterns across lncRNA and protein-coding genes
+- assess whether highly correlated gene pairs are supported across pseudobulk samples
+
+No genes or correlations are removed at this stage.
+
+```{r}
+grn_correlation_detection_summary <-
+  summarize_grn_correlations_by_detection(
+    correlation_matrix = grn_spearman_matrix,
+    expression_statistics = grn_expression_qc,
+    gene_sets = grn_gene_sets
+  )
+
+grn_correlation_detection_summary
+```
+
+# GRN Expression Filtering - Finalization
+
+The unfiltered GRN validation showed that the complete workflow preserves
+lncRNA representation, but strong correlations are largely associated with
+genes detected in very few pseudobulk samples.
+
+The expression filtering workflow introduced previously is therefore completed
+at this stage before final network inference.
+
+## STEP 3: Select Filtering Thresholds
+
+Objective:
+
+- define expression-based filtering criteria based on the observed detection
+  patterns
+- reduce correlations driven by poorly detected genes
+- preserve lncRNA representation for downstream GRN inference
+
+```{r}
+grn_detection_thresholds <- evaluate_grn_detection_thresholds(
+  expression_statistics = grn_expression_qc,
+  gene_sets = grn_gene_sets
+)
+
+grn_detection_thresholds
+
+grn_detection_threshold_plots <- plot_grn_detection_thresholds(
+  detection_thresholds = grn_detection_thresholds,
+  selected_threshold = 2
+)
+
+grn_detection_threshold_plots$retained_counts
+
+grn_detection_threshold_plots$retention_proportion
+```
+
+A minimum detection threshold of 2 pseudobulk samples was selected for the
+CRC dataset.
+
+This conservative threshold removes genes that are never detected or detected
+in only one pseudobulk sample, which were found to strongly contribute to the
+high correlations observed in the unfiltered CRC analysis.
+
+The selected threshold retains 3,223 lncRNA genes, preserving substantial
+lncRNA representation for downstream CRC GRN inference.
+
+## STEP 4: Apply Expression Filtering
+
+Objective:
+
+- remove genes that do not satisfy the selected expression criteria
+- generate the filtered expression matrix used for final GRN inference
+- retain the unfiltered analysis as a baseline for comparison
+
+```{r}
+grn_filtered <- apply_grn_expression_filter(
+  expression_matrix = grn_pseudobulk_logcpm,
+  count_matrix = grn_pseudobulk_counts,
+  expression_statistics = grn_expression_qc,
+  gene_sets = grn_gene_sets,
+  min_detected_pseudobulk = 2
+)
+
+dim(grn_filtered$expression)
+
+length(grn_filtered$gene_sets$lnc)
+
+length(grn_filtered$gene_sets$prot)
+
+length(grn_filtered$retained_genes)
+
+length(grn_filtered$removed_genes)
+
+saveRDS(grn_filtered, file.path(grn_out_dir, "grn_filtered.rds"))
+```
+
 # GENIE3 Network Inference
+
+## STEP 1: Prepare Candidate Regulators
+
+Objective:
+
+- identify human transcription factors supported by the curated Human TF database
+- restrict candidate regulators to protein-coding genes retained after CRC expression filtering
+- prepare a biologically informed regulator set for GENIE3 inference
+
+```{r}
+human_tf <- read.delim(file.path(data_dir, "DatabaseExtract_v_1.01.txt"), header = TRUE, stringsAsFactors = FALSE)
+
+grn_genie3_regulators <- prepare_genie3_regulators(
+  human_tf = human_tf,
+  filtered_gene_sets = grn_filtered$gene_sets,
+  expression_matrix = grn_filtered$expression
+)
+
+length(grn_genie3_regulators)
+
+head(grn_genie3_regulators)
+```
+
+## STEP 2: Configure GENIE3 Inference
+
+Objective:
+
+- define reproducible GENIE3 inference parameters
+- use curated transcription factors as candidate regulators
+- retain all filtered GRN genes as potential targets
+
+```{r}
+grn_genie3_config <- list(
+  tree_method = "RF",
+  K = "sqrt",
+  n_trees = 1000,
+  n_cores = 8
+)
+
+grn_genie3_config
+```
+
+## STEP 3: Run GENIE3 Network Inference
+
+Objective:
+
+- infer directed regulatory relationships from filtered pseudobulk expression
+- use curated transcription factors as candidate regulators
+- retain all filtered genes as potential targets
+- compute GENIE3 importance scores using Random Forests
+
+```{r}
+set.seed(grn_config$random_seed)
+
+grn_genie3_weights <- GENIE3::GENIE3(
+  exprMatrix = as.matrix(grn_filtered$expression),
+  regulators = grn_genie3_regulators,
+  treeMethod = grn_genie3_config$tree_method,
+  K = grn_genie3_config$K,
+  nTrees = grn_genie3_config$n_trees,
+  nCores = grn_genie3_config$n_cores
+)
+
+saveRDS(grn_genie3_weights, file.path(grn_out_dir, "grn_genie3_weights.rds"))
+
+dim(grn_genie3_weights)
+sum(is.na(grn_genie3_weights))
+range(grn_genie3_weights)
+```
+
 # Spearman and GENIE3 Integration
+
+## STEP 1: Integrate GENIE3 and Spearman Results
+
+Objective:
+
+- combine GENIE3 importance scores with Spearman correlations
+- associate each candidate TF-target interaction with its expression correlation
+- retain the direction of regulation inferred by GENIE3 and the sign of the corresponding Spearman correlation
+- prepare candidate regulatory interactions for GRN construction
+
+```{r}
+# grn_genie3_weights <- readRDS(file.path(grn_out_dir, "grn_genie3_weights.rds"))
+grn_integrated_edges <- integrate_genie3_spearman(
+  genie3_weights = grn_genie3_weights,
+  spearman_matrix = grn_spearman_matrix
+)
+
+dim(grn_integrated_edges)
+
+head(grn_integrated_edges)
+
+summary(grn_integrated_edges$genie3_weight)
+
+summary(grn_integrated_edges$spearman_rho)
+
+sum(is.na(grn_integrated_edges))
+```
+
+## STEP 2: Inspect Integrated Edge Score Distributions
+
+Objective:
+
+- characterize the distribution of GENIE3 importance scores
+- evaluate the strength of Spearman correlations among candidate interactions
+- assess the effect of different score thresholds on network size
+- support an informed selection of criteria for GRN construction
+
+No interactions are removed at this stage.
+
+```{r}
+grn_integrated_summary <- summarize_grn_integrated_edges(
+  integrated_edges = grn_integrated_edges
+)
+
+grn_integrated_summary$genie3_summary
+
+grn_integrated_summary$spearman_summary
+
+grn_integrated_summary$genie3_quantiles
+
+grn_integrated_summary$threshold_counts
+
+grn_genie3_importance_plot <- plot_grn_genie3_importance_distribution(
+  integrated_edges = grn_integrated_edges
+)
+
+grn_genie3_importance_plot
+
+grn_threshold_selection_plot <- plot_grn_threshold_selection(
+  threshold_counts = grn_integrated_summary$threshold_counts,
+  selected_genie3_quantile = 0.995,
+  selected_spearman_threshold = 0.5
+)
+
+grn_threshold_selection_plot
+```
+
+## STEP 3: Evaluate Candidate Network Composition
+
+Objective:
+
+- evaluate network composition across candidate GENIE3 and Spearman thresholds
+- quantify lncRNA representation in candidate networks
+- compare network size with preservation of biologically relevant targets
+- support the final selection of GRN construction criteria
+
+No final network threshold is selected at this stage.
+
+```{r}
+grn_candidate_networks <- evaluate_grn_candidate_networks(
+  integrated_edges = grn_integrated_edges,
+  filtered_gene_sets = grn_filtered$gene_sets,
+  genie3_quantile_table = grn_integrated_summary$genie3_quantiles
+)
+
+grn_candidate_networks
+
+grn_lnc_retention_plot <- plot_grn_lnc_retention_vs_network_size(
+  candidate_networks = grn_candidate_networks,
+  selected_genie3_quantile = 0.995,
+  selected_spearman_threshold = 0.5
+)
+
+grn_lnc_retention_plot
+```
+
+## STEP 4: Evaluate lncRNA Edge Representation
+
+Objective:
+
+- quantify regulatory interactions targeting lncRNA and protein-coding genes
+- compare lncRNA edge representation across selected candidate networks
+- verify that candidate thresholds preserve substantial lncRNA connectivity
+- support the final selection of GRN construction criteria
+
+No final network is constructed at this stage.
+
+```{r}
+grn_candidate_settings <- data.frame(
+  genie3_quantile = c(0.99, 0.995),
+  genie3_cutoff = c(0.008532776, 0.011259691),
+  spearman_threshold = c(0.5, 0.5)
+)
+
+grn_lnc_edge_representation <- evaluate_grn_lnc_edge_representation(
+  integrated_edges = grn_integrated_edges,
+  filtered_gene_sets = grn_filtered$gene_sets,
+  candidate_settings = grn_candidate_settings
+)
+
+grn_lnc_edge_representation
+```
+
 # GRN Construction
+
+## STEP 1: Construct Final GRN
+
+Objective:
+
+- apply the selected GENIE3 and Spearman criteria
+- retain high-confidence TF-target regulatory interactions
+- preserve GENIE3 importance and Spearman correlation as edge attributes
+- generate the final CRC GRN edge list for downstream network analysis
+
+```{r}
+grn_final_edges <- construct_final_grn(
+  integrated_edges = grn_integrated_edges,
+  genie3_cutoff = 0.011259691,
+  spearman_threshold = 0.5
+)
+
+dim(grn_final_edges)
+
+head(grn_final_edges)
+
+table(grn_final_edges$correlation_sign)
+
+length(unique(grn_final_edges$regulator))
+
+length(unique(grn_final_edges$target))
+
+saveRDS(grn_final_edges, file.path(grn_out_dir, "grn_final_edges.rds"))
+```
+
+## STEP 2: Prepare GRN Node Table
+
+Objective:
+
+- identify all genes represented in the final GRN
+- classify nodes according to gene biotype
+- identify transcription factor regulators
+- prepare node annotations for downstream network analysis
+
+```{r}
+grn_nodes <- prepare_grn_node_table(
+  grn_edges = grn_final_edges,
+  gene_sets = grn_filtered$gene_sets,
+  tf_regulators = grn_genie3_regulators
+)
+
+dim(grn_nodes)
+
+head(grn_nodes)
+
+table(grn_nodes$gene_type)
+
+table(grn_nodes$is_tf)
+
+table(grn_nodes$is_regulator, grn_nodes$is_target)
+
+saveRDS(grn_nodes, file.path(grn_out_dir, "grn_nodes.rds"))
+```
+
 # GRN Hub Analysis
+
+## STEP 1: Calculate Node Connectivity
+
+Objective:
+
+- calculate in-degree, out-degree, and total degree for each GRN node
+- identify highly connected regulatory and target genes
+- prepare node-level network metrics for hub analysis
+
+```{r}
+grn_node_connectivity <- calculate_grn_node_connectivity(
+  grn_edges = grn_final_edges,
+  grn_nodes = grn_nodes
+)
+
+dim(grn_node_connectivity)
+
+summary(grn_node_connectivity$out_degree)
+
+summary(grn_node_connectivity$in_degree)
+
+summary(grn_node_connectivity$total_degree)
+
+head(
+  grn_node_connectivity[
+    order(-grn_node_connectivity$total_degree),
+  ]
+)
+
+saveRDS(grn_node_connectivity, file.path(grn_out_dir, "grn_node_connectivity.rds"))
+```
+
+## STEP 2: Evaluate Hub Connectivity Thresholds
+
+Objective:
+
+- evaluate high-connectivity thresholds for regulatory, target, and global hubs
+- characterize the upper tail of node degree distributions
+- quantify the number of nodes retained at different connectivity quantiles
+- support a data-driven definition of GRN hubs
+
+```{r}
+grn_hub_thresholds <- evaluate_grn_hub_thresholds(
+  node_connectivity = grn_node_connectivity
+)
+
+grn_hub_thresholds
+```
+
+## STEP 3: Identify GRN Hubs
+
+Objective:
+
+- identify regulatory hubs based on high out-degree
+- identify target hubs based on high in-degree
+- identify global hubs based on high total degree
+- retain node annotations and connectivity metrics for downstream analysis
+
+```{r}
+grn_hubs <- identify_grn_hubs(
+  node_connectivity = grn_node_connectivity,
+  hub_quantile = 0.99
+)
+
+grn_hubs$thresholds
+
+nrow(grn_hubs$regulatory_hubs)
+
+nrow(grn_hubs$target_hubs)
+
+nrow(grn_hubs$global_hubs)
+
+head(grn_hubs$regulatory_hubs)
+
+head(grn_hubs$target_hubs)
+
+head(grn_hubs$global_hubs)
+
+saveRDS(grn_hubs, file.path(grn_out_dir, "grn_hubs.rds"))
+```
+
+## STEP 4: Analyze lncRNA Regulatory Connectivity
+
+Objective:
+
+- quantify lncRNA targets associated with each regulatory hub
+- distinguish lncRNA and protein-coding connectivity among regulatory hubs
+- identify transcription factors with strong connectivity to lncRNA targets
+- characterize the contribution of lncRNA interactions to hub regulatory profiles
+
+```{r}
+grn_hub_lnc_connectivity <- analyze_grn_hub_lnc_connectivity(
+  grn_edges = grn_final_edges,
+  regulatory_hubs = grn_hubs$regulatory_hubs,
+  gene_sets = grn_filtered$gene_sets
+)
+
+grn_hub_lnc_connectivity
+
+saveRDS(grn_hub_lnc_connectivity, file.path(grn_out_dir, "grn_hub_lnc_connectivity.rds"))
+```
+
+## STEP 5: Analyze lncRNA Target Hubs
+
+Objective:
+
+- identify lncRNA genes among high in-degree target hubs
+- quantify their regulatory connectivity
+- characterize the number and strength of TF interactions targeting lncRNA hubs
+- prepare lncRNA target hubs for downstream visualization and biological interpretation
+
+```{r}
+grn_lnc_target_hubs <- analyze_grn_lnc_target_hubs(
+  grn_edges = grn_final_edges,
+  target_hubs = grn_hubs$target_hubs,
+  gene_sets = grn_filtered$gene_sets
+)
+
+dim(grn_lnc_target_hubs)
+
+head(grn_lnc_target_hubs, 10)
+
+saveRDS(grn_lnc_target_hubs, file.path(grn_out_dir, "grn_lnc_target_hubs.rds"))
+```
+
 # GRN Visualization
+
+## STEP 1: Prepare Regulatory Hub-lncRNA Subnetwork
+
+Objective:
+
+- extract regulatory interactions between GRN regulatory hubs and lncRNA targets
+- preserve GENIE3 importance and Spearman correlation as edge attributes
+- prepare a focused and interpretable subnetwork for GRN visualization
+
+```{r}
+grn_hub_lnc_subnetwork <- prepare_grn_hub_lnc_subnetwork(
+  grn_edges = grn_final_edges,
+  regulatory_hubs = grn_hubs$regulatory_hubs,
+  gene_sets = grn_filtered$gene_sets
+)
+
+dim(grn_hub_lnc_subnetwork$edges)
+
+dim(grn_hub_lnc_subnetwork$nodes)
+
+table(grn_hub_lnc_subnetwork$nodes$node_type)
+
+head(grn_hub_lnc_subnetwork$edges)
+
+saveRDS(grn_hub_lnc_subnetwork, file.path(grn_out_dir, "grn_hub_lnc_subnetwork.rds"))
+```
+
+## STEP 2: Prepare Focused Hub-lncRNA Network
+
+Objective:
+
+- identify lncRNA targets shared by multiple regulatory hubs
+- reduce visual complexity while preserving highly connected lncRNA targets
+- prepare an interpretable regulatory subnetwork for network visualization
+
+This step is used for visualization only and does not modify the final GRN.
+
+```{r}
+grn_focused_hub_lnc_network <- prepare_focused_grn_hub_lnc_network(
+  hub_lnc_subnetwork = grn_hub_lnc_subnetwork,
+  min_hub_connections = 2
+)
+
+dim(grn_focused_hub_lnc_network$edges)
+
+dim(grn_focused_hub_lnc_network$nodes)
+
+table(grn_focused_hub_lnc_network$nodes$node_type)
+
+summary(grn_focused_hub_lnc_network$nodes$degree_in_subnetwork)
+
+saveRDS(grn_focused_hub_lnc_network, file.path(grn_out_dir, "grn_focused_hub_lnc_network.rds"))
+```
+
+## STEP 3: Visualize Focused Hub-lncRNA Network
+
+Objective:
+
+- visualize regulatory interactions between major TF hubs and shared lncRNA targets
+- distinguish regulatory hubs from lncRNA nodes
+- emphasize highly connected nodes while preserving the complete focused subnetwork
+- generate an interpretable representation of hub-lncRNA regulatory relationships
+
+Node labeling is simplified for visualization only and does not modify the network.
+
+```{r}
+grn_focused_hub_lnc_graph <- plot_focused_grn_hub_lnc_network(
+  focused_network = grn_focused_hub_lnc_network,
+  top_lnc_labels = 10,
+  seed = grn_config$random_seed
+)
+
+igraph::vcount(grn_focused_hub_lnc_graph)
+
+igraph::ecount(grn_focused_hub_lnc_graph)
+```
+
+## STEP 4: Prepare lncRNA Target Hub Network
+
+Objective:
+
+- visualize highly connected lncRNA target hubs and their incoming TF interactions
+- highlight convergence of multiple regulators on selected lncRNA targets
+- provide a complementary target-centered view of the GRN
+
+The number of lncRNA hubs displayed is restricted for visualization only and
+does not modify the final GRN or hub classification.
+
+```{r}
+grn_lnc_target_hub_network <- prepare_grn_lnc_target_hub_network(
+  grn_edges = grn_final_edges,
+  lnc_target_hubs = grn_lnc_target_hubs,
+  top_n = 10
+)
+
+dim(grn_lnc_target_hub_network$edges)
+
+dim(grn_lnc_target_hub_network$nodes)
+
+table(grn_lnc_target_hub_network$nodes$node_type)
+
+head(grn_lnc_target_hub_network$edges)
+
+saveRDS(grn_lnc_target_hub_network, file.path(grn_out_dir, "grn_lnc_target_hub_network.rds"))
+```
+
+## STEP 5: Visualize lncRNA Target Hub Network
+
+Objective:
+
+- visualize highly connected lncRNA target hubs and their incoming TF interactions
+- distinguish lncRNA target hubs from TF regulators
+- highlight regulatory convergence on major lncRNA targets
+- preserve all interactions contained in the prepared target-centered subnetwork
+
+Node labeling is simplified for visualization only and does not modify the network.
+
+```{r}
+grn_lnc_target_hub_graph <- plot_grn_lnc_target_hub_network(
+  target_hub_network = grn_lnc_target_hub_network,
+  top_tf_labels = 10,
+  seed = grn_config$random_seed
+)
+
+igraph::vcount(grn_lnc_target_hub_graph)
+
+igraph::ecount(grn_lnc_target_hub_graph)
+```
+
 # GRN Results Export
+
+## STEP 1: Export Core GRN Results
+
+Objective:
+
+- export the principal GRN edge, node, hub, and lncRNA connectivity tables
+- generate human-readable tabular outputs for downstream inspection and reporting
+- preserve the RDS objects as reproducible analysis checkpoints
+
+```{r}
+grn_exported_files <- export_grn_core_results(
+  grn_edges = grn_final_edges,
+  grn_nodes = grn_nodes,
+  node_connectivity = grn_node_connectivity,
+  hubs = grn_hubs,
+  hub_lnc_connectivity = grn_hub_lnc_connectivity,
+  lnc_target_hubs = grn_lnc_target_hubs,
+  output_dir = grn_out_dir
+)
+
+grn_exported_files
+```
+
+## STEP 2: Summarize Final GRN
+
+Objective:
+
+- summarize the principal structural properties of the final CRC GRN
+- report node, edge, regulator, target, and gene-biotype composition
+- summarize regulatory hub and lncRNA target hub representation
+- generate a compact table for reporting and downstream interpretation
+
+```{r}
+grn_final_summary <- summarize_final_grn(
+  grn_edges = grn_final_edges,
+  grn_nodes = grn_nodes,
+  hubs = grn_hubs,
+  lnc_target_hubs = grn_lnc_target_hubs
+)
+
+grn_final_summary
+
+grn_final_summary <- summarize_final_grn(
+  grn_edges = grn_final_edges,
+  grn_nodes = grn_nodes,
+  hubs = grn_hubs,
+  lnc_target_hubs = grn_lnc_target_hubs
+)
+
+grn_final_summary
+
+grn_final_composition_plot <- plot_final_grn_gene_composition(
+  final_summary = grn_final_summary
+)
+
+grn_final_composition_plot
+
+saveRDS(grn_final_summary, file.path(grn_out_dir, "grn_final_summary.rds"))
+
+saveRDS(grn_final_summary, file.path(grn_out_dir, "grn_final_summary.rds"))
+
+write.table(
+  grn_final_summary,
+  file = file.path(grn_out_dir, "tables", "grn_final_summary.tsv"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+save.image(file = file.path(grn_out_dir, "grn_workspace_current.RData"))
+load(file.path(grn_out_dir, "grn_workspace_current.RData"))
+```
