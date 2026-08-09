@@ -1117,6 +1117,12 @@ nrow(grn_hubs$global_hubs)
 
 head(grn_hubs$regulatory_hubs)
 
+grn_regulatory_hub_plot <- plot_grn_regulatory_hubs(
+  regulatory_hubs = grn_hubs$regulatory_hubs
+)
+
+grn_regulatory_hub_plot
+
 head(grn_hubs$target_hubs)
 
 head(grn_hubs$global_hubs)
@@ -1141,6 +1147,12 @@ grn_hub_lnc_connectivity <- analyze_grn_hub_lnc_connectivity(
 )
 
 grn_hub_lnc_connectivity
+
+grn_hub_lnc_connectivity_plot <- plot_grn_hub_lnc_connectivity(
+  hub_lnc_connectivity = grn_hub_lnc_connectivity
+)
+
+grn_hub_lnc_connectivity_plot
 
 saveRDS(grn_hub_lnc_connectivity, file.path(grn_out_dir, "grn_hub_lnc_connectivity.rds"))
 ```
@@ -1289,13 +1301,8 @@ Node labeling is simplified for visualization only and does not modify the netwo
 ```{r}
 grn_lnc_target_hub_graph <- plot_grn_lnc_target_hub_network(
   target_hub_network = grn_lnc_target_hub_network,
-  top_tf_labels = 10,
   seed = grn_config$random_seed
 )
-
-igraph::vcount(grn_lnc_target_hub_graph)
-
-igraph::ecount(grn_lnc_target_hub_graph)
 ```
 
 # GRN Results Export
@@ -1341,22 +1348,11 @@ grn_final_summary <- summarize_final_grn(
 
 grn_final_summary
 
-grn_final_summary <- summarize_final_grn(
-  grn_edges = grn_final_edges,
-  grn_nodes = grn_nodes,
-  hubs = grn_hubs,
-  lnc_target_hubs = grn_lnc_target_hubs
-)
-
-grn_final_summary
-
 grn_final_composition_plot <- plot_final_grn_gene_composition(
   final_summary = grn_final_summary
 )
 
 grn_final_composition_plot
-
-saveRDS(grn_final_summary, file.path(grn_out_dir, "grn_final_summary.rds"))
 
 saveRDS(grn_final_summary, file.path(grn_out_dir, "grn_final_summary.rds"))
 
@@ -1368,6 +1364,6 @@ write.table(
   row.names = FALSE
 )
 
-save.image(file = file.path(grn_out_dir, "grn_workspace_current.RData"))
-load(file.path(grn_out_dir, "grn_workspace_current.RData"))
+# save.image(file = file.path(grn_out_dir, "grn_workspace_current.RData"))
+# load(file.path(grn_out_dir, "grn_workspace_current.RData"))
 ```
