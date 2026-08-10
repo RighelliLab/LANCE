@@ -639,7 +639,7 @@ sum(is.na(grn_spearman_matrix))
 
 range(grn_spearman_matrix)
 
-saveRDS(grn_spearman_matrix, file.path(grn_out_dir, "grn_spearman_unfiltered.rds"))
+# saveRDS(grn_spearman_matrix, file.path(grn_out_dir, "grn_spearman_unfiltered.rds"))
 ```
 
 # Correlation Network Filtering
@@ -870,7 +870,7 @@ Objective:
 - prepare candidate regulatory interactions for GRN construction
 
 ```{r}
-# grn_genie3_weights <- readRDS(file.path(grn_out_dir, "grn_genie3_weights.rds"))
+grn_genie3_weights <- readRDS(file.path(grn_out_dir, "grn_genie3_weights.rds"))
 grn_integrated_edges <- integrate_genie3_spearman(
   genie3_weights = grn_genie3_weights,
   spearman_matrix = grn_spearman_matrix
@@ -1295,8 +1295,6 @@ Objective:
 - distinguish lncRNA target hubs from TF regulators
 - highlight regulatory convergence on major lncRNA targets
 - preserve all interactions contained in the prepared target-centered subnetwork
-
-Node labeling is simplified for visualization only and does not modify the network.
 
 ```{r}
 grn_lnc_target_hub_graph <- plot_grn_lnc_target_hub_network(
