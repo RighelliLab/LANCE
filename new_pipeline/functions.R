@@ -138,98 +138,111 @@ load_txt_counts_to_seurat <- function(
   return(obj)
 }
 
-
 # ------------------------------------------------------------------------------
 # FUNCTION: load_h5ad_to_seurat
 # ------------------------------------------------------------------------------
-# Load a single-cell dataset stored in AnnData (.h5ad) format and convert it
-# into a Seurat object.
+# Load a normalized AnnData (.h5ad) dataset and convert it into a Seurat object.
 #
-# The function:
-# - imports gene expression data from an h5ad file
-# - converts the expression matrix to a sparse format
-# - loads and attaches cell metadata
-# - performs a consistency check between cells and metadata
-# - calculates mitochondrial gene percentages
-# - applies mitochondrial quality-control filtering
-# - optionally saves the resulting Seurat object to disk
+# h5ad files used in this project contain:
+# - normalized expression values in ad$X
+# - cell metadata in ad$obs
 #
-# INPUT:
-# - h5ad_file: path to the AnnData (.h5ad) file
-# - meta_file: path to the metadata annotation file
-# - mt_pattern: regular expression identifying mitochondrial genes
-# - mt_threshold: maximum allowed mitochondrial percentage
-# - save_path: optional path for saving the Seurat object
+# The expression matrix is stored in both:
+# - counts: required by CreateSeuratObject / Seurat object construction
+# - data: preserves the already-normalized values for downstream analyses
 #
-# OUTPUT:
-# - filtered Seurat object ready for downstream analysis
+# No additional mitochondrial filtering or normalization is performed here.
 # ------------------------------------------------------------------------------
 load_h5ad_to_seurat <- function(
     h5ad_file,
-    meta_file,
-    mt_pattern = "^MT-",
-    mt_threshold = 5,
-    save_path = NULL
+    save_path = NULL,
+    rename_celltype = TRUE
 ) {
-
-  anndata <- reticulate::import("anndata")
-  adata <- anndata$read_h5ad(h5ad_file)
-
-  # AnnData stores X as cells x genes; Seurat expects genes x cells.
-  X <- adata$X
-  dge <- Matrix::Matrix(X, sparse = TRUE)
-  obs_names <- unlist(adata$obs_names$to_list(), use.names = FALSE)
-  var_names <- unlist(adata$var_names$to_list(), use.names = FALSE)
-
-  if (!all(dim(dge) == c(length(obs_names), length(var_names)))) {
-    stop("Dimensioni di X, obs_names e var_names non coerenti")
+  
+  if (!file.exists(h5ad_file)) {
+    stop("h5ad file not found: ", h5ad_file)
   }
-
-  dge <- t(dge)
-  rownames(dge) <- var_names
-  colnames(dge) <- obs_names
-
-  if (anyDuplicated(rownames(dge))) {
-    stop("I nomi dei geni non sono univoci")
+  
+  if (!requireNamespace("anndataR", quietly = TRUE)) {
+    stop("Package 'anndataR' is required to read h5ad files")
   }
-  if (anyDuplicated(colnames(dge))) {
-    stop("I barcode delle cellule non sono univoci")
+  
+  ad <- anndataR::read_h5ad(h5ad_file)
+  
+  if (is.null(ad$X)) {
+    stop("AnnData object does not contain X")
   }
-
-  meta <- read.table(
-    meta_file,
-    header = TRUE,
-    sep = "\t",
-    row.names = 1,
-    check.names = FALSE
-  )
-
-  if (ncol(dge) != nrow(meta)) {
-    stop("Mismatch tra cellule e metadata")
+  
+  # AnnData: cells x genes -> Seurat: genes x cells
+  expr <- t(ad$X)
+  
+  # Convert row-oriented sparse matrices (dgRMatrix) to column-oriented
+  # sparse matrices, which are handled more reliably by Seurat.
+  if (inherits(expr, "dgRMatrix")) {
+    expr <- methods::as(expr, "TsparseMatrix")
+    expr <- methods::as(expr, "CsparseMatrix")
+  } else if (!inherits(expr, "CsparseMatrix")) {
+    expr <- methods::as(expr, "CsparseMatrix")
   }
+  
+  # Recover gene and cell names from AnnData metadata when needed.
+  meta <- as.data.frame(ad$obs)
+  gene_meta <- as.data.frame(ad$var)
+  
+  cell_names <- rownames(meta)
+  gene_names <- rownames(gene_meta)
+  
+  if (is.null(cell_names) || length(cell_names) != ncol(expr)) {
+    stop("Cell names in ad$obs are missing or inconsistent with ad$X")
+  }
+  
+  if (is.null(gene_names) || length(gene_names) != nrow(expr)) {
+    stop("Gene names in ad$var are missing or inconsistent with ad$X")
+  }
+  
+  rownames(expr) <- gene_names
+  colnames(expr) <- cell_names
+  
+  if (anyDuplicated(rownames(expr))) {
+    stop("Gene names in the h5ad expression matrix are not unique")
+  }
+  
+  if (anyDuplicated(colnames(expr))) {
+    stop("Cell barcodes in the h5ad expression matrix are not unique")
+  }
+  
   if (anyDuplicated(rownames(meta))) {
-    stop("Cell barcodes in metadata are not unique")
+    stop("Cell barcodes in ad$obs are not unique")
   }
-  if (!setequal(colnames(dge), rownames(meta))) {
-    stop("Cell barcodes and metadata row names do not match")
+  
+  # Reorder metadata exactly as the expression matrix.
+  meta <- meta[colnames(expr), , drop = FALSE]
+  
+  # Standardize the metadata name used throughout the current pipeline.
+  if (rename_celltype &&
+      "Celltype" %in% colnames(meta) &&
+      !"Cell_type" %in% colnames(meta)) {
+    colnames(meta)[colnames(meta) == "Celltype"] <- "Cell_type"
   }
-  meta <- meta[colnames(dge), , drop = FALSE]
-
-  obj <- Seurat::CreateSeuratObject(counts = dge)
-
-  obj <- Seurat::AddMetaData(obj, meta)
-
-  obj[["percent.mt"]] <- Seurat::PercentageFeatureSet(
-    obj,
-    pattern = mt_pattern
+  
+  obj <- Seurat::CreateSeuratObject(
+    counts = expr,
+    assay = "RNA",
+    meta.data = meta
   )
-
-  obj <- subset(obj, subset = percent.mt < mt_threshold)
-
+  
+  # ad$X is already normalized in the PDAC/LU-ADC inputs used in this project.
+  obj <- SeuratObject::SetAssayData(
+    object = obj,
+    assay = "RNA",
+    layer = "data",
+    new.data = expr
+  )
+  
   if (!is.null(save_path)) {
     saveRDS(obj, save_path)
   }
-
+  
   return(obj)
 }
 
@@ -410,12 +423,33 @@ run_scrmra_annotation <- function(obj, logcounts) {
 # - preprocessed Seurat object ready for downstream analysis
 # ------------------------------------------------------------------------------
 seurat_preprocess <- function(obj) {
-  DefaultAssay(obj) <- "RNA"
-  obj <- JoinLayers(obj)
-  obj <- NormalizeData(obj)
-  Idents(obj) <- "Cell_type"
+  
+  SeuratObject::DefaultAssay(obj) <- "RNA"
+  
+  # Merge Seurat v5 layers first (e.g. counts.1/data.1 after dataset merge).
+  obj <- SeuratObject::JoinLayers(
+    object = obj,
+    assay = "RNA"
+  )
+  
+  available_layers <- SeuratObject::Layers(obj[["RNA"]])
+  
+  # Raw-count datasets do not yet have a normalized data layer.
+  # h5ad datasets already carry normalized values in "data",
+  # so they must not be normalized a second time.
+  if (!"data" %in% available_layers) {
+    obj <- Seurat::NormalizeData(obj)
+  }
+  
+  if (!"Cell_type" %in% colnames(obj@meta.data)) {
+    stop("Metadata column 'Cell_type' not found")
+  }
+  
+  Seurat::Idents(obj) <- "Cell_type"
+  
   return(obj)
 }
+
 
 # ------------------------------------------------------------------------------
 # FUNCTION: gene_biotype_matching
@@ -573,32 +607,18 @@ compute_gini_pipeline <- function(obj, features, type, chunk_size = 1000) {
   return(res)
 }
 
-# ------------------------------------------------------------------------------
-# FUNCTION: plot_gini_results
-# ------------------------------------------------------------------------------
-# Visualize Gini coefficient distributions for gene biotypes.
-#
-# The function:
-# - creates boxplot comparing lncRNA vs protein-coding genes
-# - adds statistical comparison
-# - annotates gene counts
-# - applies fixed color palette for reproducibility
-#
-# INPUT:
-# - GiniCoef_clean: cleaned Gini results table
-# - lnc_n: number of lncRNA genes
-# - prot_n: number of protein-coding genes
-#
-# OUTPUT:
-# - ggplot object
-# ------------------------------------------------------------------------------
 plot_gini_results <- function(GiniCoef_clean, lnc_n, prot_n) {
-
+  
   ggplot(GiniCoef_clean, aes(x = type, y = gini, fill = type)) +
     geom_boxplot() +
     ggpubr::stat_compare_means(hjust = 0) +
     theme_bw() +
-    scale_fill_manual(values = kelly()[c(12,9)]) +
+    scale_fill_manual(
+      values = c(
+        "lncRNA" = "#0072B2",
+        "protein_coding" = "#D55E00"
+      )
+    ) +
     theme(
       axis.title.x = element_blank(),
       axis.text.x = element_blank(),

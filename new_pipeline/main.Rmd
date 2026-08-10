@@ -133,10 +133,7 @@ obj_list[[1]]
 # Merge Datasets
 
 ```{r}
-merged_obj <- merge_seurat_objects(
-  obj_list = obj_list,
-  save_path = file.path(out_dir, "merged_seurat_qc.rds")
-)
+merged_obj <- merge_seurat_objects(obj_list = obj_list, save_path = file.path(out_dir, "merged_seurat_qc.rds"))
 
 # Check Merged objs
 
@@ -205,10 +202,8 @@ obj <- RunUMAP(obj, dims = 1:15)
 Save the processed Seurat object after normalization and dimensionality reduction.
 
 ```{r}
-saveRDS(
-  obj,
-  file.path(out_dir, "merged_normalized_hvgs.rds")
-)
+saveRDS(obj, file.path(out_dir, "merged_normalized_hvgs.rds"))
+# obj <- readRDS(file.path(out_dir, "merged_normalized_hvgs.rds"))
 ```
 
 
@@ -252,6 +247,11 @@ Perform automated cell type prediction using reference-based annotation.
 
 ```{r}
 obj <- run_scrmra_annotation(obj, logcounts)
+
+# Save object with scMRMA annotations
+
+saveRDS(obj, file.path(out_dir, "merged_scrmra_annotated.rds")
+)
 ```
 
 ## Annotation Validation
@@ -259,6 +259,8 @@ obj <- run_scrmra_annotation(obj, logcounts)
 Compare original annotations with scMRMA predictions.
 
 ```{r}
+obj <- readRDS(file.path(out_dir, "merged_scrmra_annotated.rds"))
+
 df <- as.data.frame(table(obj$Cell_type, obj$cell_type1))
 colnames(df) <- c("Original", "Validation", "Fraction")
 
