@@ -4992,3 +4992,96 @@ plot_grn_hub_lnc_connectivity <- function(
   
   return(plot)
 }
+
+# ==============================================================================
+# INTEGRATED lncRNA-TF-PCG GRN
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# FUNCTION: infer_integrated_grn_relationships
+# ------------------------------------------------------------------------------
+
+# Infer regulator-target relationships for one interaction class.
+#
+# This function:
+# - restricts regulators and targets to genes present in the expression matrix
+# - runs GENIE3 using the specified regulator and target gene sets
+# - integrates GENIE3 importance scores with the corresponding Spearman
+#   correlations
+# - annotates regulator type, target type, and interaction class
+# - does not apply final GENIE3 or Spearman thresholds
+#
+# INPUT:
+# - expression_matrix: filtered normalized pseudobulk expression matrix
+# - spearman_matrix: filtered gene-gene Spearman correlation matrix
+# - regulators: genes used as candidate regulators
+# - targets: genes used as candidate targets
+# - regulator_type: label describing the regulator class
+# - target_type: label describing the target class
+# - edge_type: label describing the interaction class
+# - seed: random seed used for reproducible GENIE3 inference
+#
+# OUTPUT:
+# - list containing:
+#   - weights: GENIE3 importance matrix
+#   - edges: integrated and annotated regulator-target interactions
+# ------------------------------------------------------------------------------
+
+infer_integrated_grn_relationships <- function(
+    expression_matrix,
+    spearman_matrix,
+    regulators,
+    targets,
+    regulator_type,
+    target_type,
+    edge_type,
+    seed = 1234,
+    n_cores = 1
+) {
+  
+  if (!requireNamespace("GENIE3", quietly = TRUE)) {
+    stop("Package 'GENIE3' is required for GRN inference")
+  }
+  
+  regulators <- intersect(regulators, rownames(expression_matrix))
+  targets <- intersect(targets, rownames(expression_matrix))
+  
+  if (length(regulators) == 0L) {
+    stop("No candidate regulators are present in the expression matrix")
+  }
+  
+  if (length(targets) == 0L) {
+    stop("No candidate targets are present in the expression matrix")
+  }
+  
+  if (!all(regulators %in% rownames(spearman_matrix))) {
+    stop("Some regulators are missing from the Spearman matrix")
+  }
+  
+  if (!all(targets %in% colnames(spearman_matrix))) {
+    stop("Some targets are missing from the Spearman matrix")
+  }
+  
+  set.seed(seed)
+  
+  weights <- GENIE3::GENIE3(
+    exprMatrix = as.matrix(expression_matrix),
+    regulators = regulators,
+    targets = targets,
+    nCores = n_cores
+  )
+  
+  edges <- integrate_genie3_spearman(
+    genie3_weights = weights,
+    spearman_matrix = spearman_matrix
+  )
+  
+  edges$regulator_type <- regulator_type
+  edges$target_type <- target_type
+  edges$edge_type <- edge_type
+  
+  return(list(
+    weights = weights,
+    edges = edges
+  ))
+}

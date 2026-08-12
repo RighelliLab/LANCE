@@ -1363,7 +1363,219 @@ write.table(
   quote = FALSE,
   row.names = FALSE
 )
+```
+
+# Integrated lncRNA-TF-PCG Regulatory Network
+
+## STEP 1: Prepare Integrated GRN Gene Sets
+
+Objective:
+
+- reuse the genes already retained by the previous GRN expression-filtering step
+- define three gene classes for the integrated network:
+  - lncRNA
+  - transcription factors (TF)
+  - protein-coding genes excluding TFs
+- ensure that all selected genes are represented in the filtered pseudobulk expression matrix
+- verify that the three gene classes are mutually exclusive
+
+These gene sets will be reused as regulator and target groups in the subsequent
+GENIE3 analyses.
+
+The previous GRN filtering strategy is preserved unchanged.
+
+```{r}
+integrated_lnc <- intersect(grn_filtered$gene_sets$lnc, rownames(grn_filtered$expression))
+
+integrated_tf <- intersect(grn_genie3_regulators, rownames(grn_filtered$expression))
+
+integrated_pcg <- setdiff(grn_filtered$gene_sets$prot, integrated_tf)
+integrated_pcg <- intersect(integrated_pcg, rownames(grn_filtered$expression))
+
+integrated_grn_gene_sets <- list(
+  lncRNA = integrated_lnc,
+  TF = integrated_tf,
+  PCG = integrated_pcg
+)
+
+length(integrated_grn_gene_sets$lncRNA)
+length(integrated_grn_gene_sets$TF)
+length(integrated_grn_gene_sets$PCG)
+
+length(intersect(integrated_grn_gene_sets$lncRNA, integrated_grn_gene_sets$TF))
+length(intersect(integrated_grn_gene_sets$lncRNA, integrated_grn_gene_sets$PCG))
+length(intersect(integrated_grn_gene_sets$TF, integrated_grn_gene_sets$PCG))
+
+all(c(
+  integrated_grn_gene_sets$lncRNA,
+  integrated_grn_gene_sets$TF,
+  integrated_grn_gene_sets$PCG
+) %in% rownames(grn_filtered$expression))
+
+saveRDS(integrated_grn_gene_sets, file.path(grn_out_dir, "integrated_grn_gene_sets.rds"))
+```
+
+## STEP 2: Infer TF-to-PCG Interactions
+
+Objective:
+
+- infer putative regulatory interactions from transcription factors to
+  protein-coding target genes
+- use the filtered pseudobulk expression matrix defined in the previous GRN
+  workflow
+- use GENIE3 to estimate directional regulator-target importance scores
+- integrate each GENIE3 interaction with the corresponding Spearman correlation
+- annotate the resulting interactions as TF-to-PCG
+
+This step uses the general regulator-target inference procedure that will also
+be reused for the other interaction classes of the integrated GRN.
+
+No final GENIE3 or Spearman threshold is applied at this stage.`
+
+```{r}
+integrated_tf_pcg <- infer_integrated_grn_relationships(
+  expression_matrix = grn_filtered$expression,
+  spearman_matrix = grn_spearman_matrix,
+  regulators = integrated_grn_gene_sets$TF,
+  targets = integrated_grn_gene_sets$PCG,
+  regulator_type = "TF",
+  target_type = "PCG",
+  edge_type = "TF_to_PCG",
+  seed = grn_config$random_seed,
+  n_cores = 4
+)
+
+dim(integrated_tf_pcg$weights)
+dim(integrated_tf_pcg$edges)
+
+head(integrated_tf_pcg$edges)
+
+table(integrated_tf_pcg$edges$edge_type)
+
+saveRDS(integrated_tf_pcg, file.path(grn_out_dir, "integrated_tf_pcg.rds"))
+# integrated_tf_pcg <- readRDS(file.path(grn_out_dir, "integrated_tf_pcg.rds"))
+```
+
+## STEP 3: Infer TF-to-lncRNA Interactions
+
+Objective:
+
+- infer putative regulatory interactions from transcription factors to lncRNA targets
+- reuse the same GENIE3 and Spearman integration procedure applied to TF-to-PCG interactions
+- use the filtered TF and lncRNA gene sets defined for the integrated GRN
+- annotate the resulting interactions as TF-to-lncRNA
+
+GENIE3 provides model-based regulator-to-target directionality, while Spearman
+correlation provides complementary association support across pseudobulk samples.
+
+No final GENIE3 or Spearman threshold is applied at this stage.
+
+```{r}
+integrated_tf_lnc <- infer_integrated_grn_relationships(
+  expression_matrix = grn_filtered$expression,
+  spearman_matrix = grn_spearman_matrix,
+  regulators = integrated_grn_gene_sets$TF,
+  targets = integrated_grn_gene_sets$lncRNA,
+  regulator_type = "TF",
+  target_type = "lncRNA",
+  edge_type = "TF_to_lncRNA",
+  seed = grn_config$random_seed,
+  n_cores = 4
+)
+
+dim(integrated_tf_lnc$weights)
+dim(integrated_tf_lnc$edges)
+
+head(integrated_tf_lnc$edges)
+
+table(integrated_tf_lnc$edges$edge_type)
+
+saveRDS(integrated_tf_lnc, file.path(grn_out_dir, "integrated_tf_lnc.rds"))
 
 # save.image(file = file.path(grn_out_dir, "grn_workspace_current.RData"))
-# load(file.path(grn_out_dir, "grn_workspace_current.RData"))
+load(file.path(grn_out_dir, "grn_workspace_current.RData"))
 ```
+
+## STEP 4: Infer lncRNA-to-PCG Interactions
+
+Objective:
+
+- infer putative regulatory interactions from lncRNAs to protein-coding target genes
+- reuse the same GENIE3 and Spearman integration procedure applied to the previous interaction classes
+- use the filtered lncRNA and PCG gene sets defined for the integrated GRN
+- annotate the resulting interactions as lncRNA-to-PCG
+
+GENIE3 provides model-based regulator-to-target directionality, while Spearman
+correlation provides complementary association support across pseudobulk samples.
+
+No final GENIE3 or Spearman threshold is applied at this stage.
+
+```{r}
+integrated_lnc_pcg <- infer_integrated_grn_relationships(
+  expression_matrix = grn_filtered$expression,
+  spearman_matrix = grn_spearman_matrix,
+  regulators = integrated_grn_gene_sets$lncRNA,
+  targets = integrated_grn_gene_sets$PCG,
+  regulator_type = "lncRNA",
+  target_type = "PCG",
+  edge_type = "lncRNA_to_PCG",
+  seed = grn_config$random_seed,
+  n_cores = 4
+)
+
+dim(integrated_lnc_pcg$weights)
+dim(integrated_lnc_pcg$edges)
+
+head(integrated_lnc_pcg$edges)
+
+table(integrated_lnc_pcg$edges$edge_type)
+
+saveRDS(integrated_lnc_pcg, file.path(grn_out_dir, "integrated_lnc_pcg.rds"))
+```
+
+## STEP 5: Infer lncRNA-to-TF Interactions
+
+## STEP 5: Infer lncRNA-to-TF Interactions
+
+Objective:
+
+- infer putative regulatory interactions from lncRNAs to transcription factor targets
+- reuse the same GENIE3 and Spearman integration procedure applied to the previous interaction classes
+- use the filtered lncRNA and TF gene sets defined for the integrated GRN
+- annotate the resulting interactions as lncRNA-to-TF
+
+GENIE3 provides model-based regulator-to-target directionality, while Spearman
+correlation provides complementary association support across pseudobulk samples.
+
+No final GENIE3 or Spearman threshold is applied at this stage.
+
+```{r}
+integrated_lnc_tf <- infer_integrated_grn_relationships(
+  expression_matrix = grn_filtered$expression,
+  spearman_matrix = grn_spearman_matrix,
+  regulators = integrated_grn_gene_sets$lncRNA,
+  targets = integrated_grn_gene_sets$TF,
+  regulator_type = "lncRNA",
+  target_type = "TF",
+  edge_type = "lncRNA_to_TF",
+  seed = grn_config$random_seed,
+  n_cores = 4
+)
+
+dim(integrated_lnc_tf$weights)
+dim(integrated_lnc_tf$edges)
+
+head(integrated_lnc_tf$edges)
+
+table(integrated_lnc_tf$edges$edge_type)
+
+saveRDS(integrated_lnc_tf, file.path(grn_out_dir, "integrated_lnc_tf.rds"))
+```
+
+## STEP 6: Integrate All Interaction Classes
+
+## STEP 7: Annotate lncRNA-Target Interactions with LncTarD
+
+## STEP 8: Analyze Integrated GRN Motifs and Cascades
+
+## STEP 9: Query Selected lncRNA - CASC19
