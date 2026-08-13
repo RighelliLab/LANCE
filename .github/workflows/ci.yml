@@ -2,6 +2,10 @@ name: PR CMD check & BiocCheck
 
 "on":
   pull_request:
+    branches:
+      - pckg_devel
+      - devel
+      - "RELEASE_*"
   push:
     paths:
       - "DESCRIPTION"
