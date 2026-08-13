@@ -7,10 +7,14 @@ Authors@R: c(
     person("Roberta", "Esposito", email = "roberta.esposito@unibe.ch", comment = c(ORCID = "0000-0001-6644-3195"), role = "ctb"),
     person("Dario", "Righelli", email = "dario.righelli@gmail.com", comment = c(ORCID = "0000-0003-1504-3583"), role = "aut")
     )
-Description: Utilities extracted from the lncRNAs project for importing
-    single-cell RNA-seq datasets, preparing Seurat objects, quantifying gene
-    specificity, and constructing lncRNA-centered gene regulatory networks
-    from pseudobulk expression profiles.
+Description: Provides tools for the analysis of long non-coding RNA regulation
+    in single-cell transcriptomic data. LANCE supports data import and
+    preprocessing, construction of Seurat-based analysis objects, estimation
+    of gene expression specificity, and generation of pseudobulk expression
+    profiles. The package enables the reconstruction and exploration of
+    lncRNA-centered gene regulatory networks by integrating co-expression and
+    regulatory relationships, with particular emphasis on cell-type-specific
+    analyses and reusable workflows across biological datasets.
 License: Artistic-2.0
 Encoding: UTF-8
 Depends: R (>= 4.6.0)
