@@ -1,8 +1,8 @@
-#' LANCE: tools for lncRNA single-cell analysis
+#' LANCE: tools for lncRNA single-cell analysis to construct and explore lncRNA-Aware Network 
 #'
 #' Functions for single-cell RNA-seq preprocessing, lncRNA specificity analysis,
 #' pseudobulk summarization, and lncRNA-centered gene regulatory network
-#' construction extracted from the original `new_pipeline/` analysis workflow.
+#' construction.
 #'
 #' @keywords internal
 "_PACKAGE"
