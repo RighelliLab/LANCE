@@ -40,7 +40,9 @@ Suggests:
     BiocStyle,
     knitr,
     rmarkdown,
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+Remotes:
+    JiaLiVUMC/scMRMA
 VignetteBuilder: knitr
 biocViews: Software, SingleCell, Transcriptomics, RNASeq, GeneRegulation, NetworkInference, Visualization
 Roxygen: list(markdown = TRUE)
