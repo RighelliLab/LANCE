@@ -131,14 +131,15 @@ jobs:
       - name: Build package
         shell: Rscript {0}
         run: |
-          pkg_file <- devtools::build(
+          dir.create("build", showWarnings = FALSE)
+
+          pkg_file <- pkgbuild::build(
             path = ".",
             dest_path = "build",
             binary = FALSE,
             manual = FALSE,
             vignettes = TRUE
           )
-          cat("Built package:", pkg_file, "\n")
 
       - name: R CMD check
         shell: Rscript {0}
