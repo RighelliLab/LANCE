@@ -1,8 +1,10 @@
-Package: lncRNAsProject
-Title: Single-Cell lncRNA and GRN Analysis Utilities
+Package: LANCE
+Title: LncRNA-Aware Network Construction and Exploration
 Version: 0.99.0
 Authors@R: c(
-    person("Valeria", "Moriello", role = c("aut", "cre"))
+    person("Valeria", "Moriello", email = "val.moriello@studenti.unina.it", role = c("aut", "cre")),
+    person("Dario", "Righelli", email = "dario.righelli@gmail.com", role = "aut"),
+    person("Roberta", "Esposito", role = "ctb")
 )
 Description: Utilities extracted from the lncRNAs project for importing
     single-cell RNA-seq datasets, preparing Seurat objects, quantifying gene

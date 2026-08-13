@@ -1,6 +1,6 @@
-# lncRNAsProject
+# LANCE
 
-`lncRNAsProject` refactors the original `new_pipeline/` colorectal cancer single-cell analysis into an installable R/Bioconductor-style package.
+`LANCE` refactors the original `new_pipeline/` colorectal cancer single-cell analysis into an installable R/Bioconductor-style package.
 
 ## Scope
 

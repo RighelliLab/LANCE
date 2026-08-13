@@ -1,4 +1,4 @@
 library(testthat)
-library(lncRNAsProject)
+library(LANCE)
 
-test_check("lncRNAsProject")
+test_check("LANCE")

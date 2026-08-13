@@ -1,24 +1,24 @@
 ---
-title: "lncRNAsProject workflow overview"
+title: "LANCE workflow overview"
 author: "Valeria Moriello"
 output:
   BiocStyle::html_document:
     toc: true
     toc_float: true
 vignette: >
-  %\VignetteIndexEntry{lncRNAsProject workflow overview}
+  %\VignetteIndexEntry{LANCE workflow overview}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
-library(lncRNAsProject)
+library(LANCE)
 ```
 
 # Overview
 
-`lncRNAsProject` packages the functions that originally lived in `new_pipeline/functions.R` and the workflow documented in `new_pipeline/main.Rmd`.
+`LANCE` packages the functions that originally lived in `new_pipeline/functions.R` and the workflow documented in `new_pipeline/main.Rmd`.
 
 The original analysis has four main stages:
 

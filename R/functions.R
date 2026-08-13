@@ -1,4 +1,4 @@
-#' lncRNAsProject: tools for lncRNA single-cell analysis
+#' LANCE: tools for lncRNA single-cell analysis
 #'
 #' Functions for single-cell RNA-seq preprocessing, lncRNA specificity analysis,
 #' pseudobulk summarization, and lncRNA-centered gene regulatory network
