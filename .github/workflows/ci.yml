@@ -119,6 +119,10 @@ jobs:
         shell: Rscript {0}
         run: |
           options(repos = c(CRAN = Sys.getenv("CRAN")))
+          remotes::install_github(
+            "JiaLiVUMC/scMRMA",
+            upgrade = "never"
+          )
           remotes::install_deps(
             dependencies = TRUE,
             repos = BiocManager::repositories()
