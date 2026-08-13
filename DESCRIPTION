@@ -3,7 +3,7 @@ Title: LncRNA-Aware Network Construction and Exploration
 Version: 0.99.0
 Authors@R: c(
     person("Valeria", "Moriello", email = "val.moriello@studenti.unina.it", role = c("aut", "cre")),
-    person("Panagiotis", "Chouvardas", email = "panagiotis.chouvardas@dbmr.unibe.ch", comment = c(ORCID = "XXXX-XXXX-XXXX-XXXX"), role = "ctb"),
+    person("Panagiotis", "Chouvardas", email = "panagiotis.chouvardas@dbmr.unibe.ch", comment = c(ORCID = "0000-0003-1527-3151"), role = "ctb"),
     person("Roberta", "Esposito", email = "roberta.esposito@unibe.ch", comment = c(ORCID = "0000-0001-6644-3195"), role = "ctb"),
     person("Dario", "Righelli", email = "dario.righelli@gmail.com", comment = c(ORCID = "0000-0003-1504-3583"), role = "aut")
     )
