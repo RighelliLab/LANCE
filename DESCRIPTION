@@ -1,0 +1,45 @@
+Package: lncRNAsProject
+Title: Single-Cell lncRNA and GRN Analysis Utilities
+Version: 0.99.0
+Authors@R: c(
+    person("Valeria", "Moriello", role = c("aut", "cre"))
+)
+Description: Utilities extracted from the lncRNAs project for importing
+    single-cell RNA-seq datasets, preparing Seurat objects, quantifying gene
+    specificity, and constructing lncRNA-centered gene regulatory networks
+    from pseudobulk expression profiles.
+License: Artistic-2.0
+Encoding: UTF-8
+Depends: R (>= 4.4.0)
+Imports:
+    DescTools,
+    dplyr,
+    edgeR,
+    GENIE3,
+    ggplot2,
+    ggpubr,
+    ggrepel,
+    grDevices,
+    graphics,
+    grid,
+    igraph,
+    Matrix,
+    methods,
+    Nebulosa,
+    scales,
+    scMRMA,
+    Seurat,
+    SeuratObject,
+    stats,
+    utils
+Suggests:
+    anndataR,
+    BiocStyle,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+biocViews: Software, SingleCell, Transcriptomics, RNASeq, GeneRegulation, NetworkInference, Visualization
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Config/testthat/edition: 3
