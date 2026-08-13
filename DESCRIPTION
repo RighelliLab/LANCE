@@ -1,0 +1,63 @@
+Package: LANCE
+Title: LncRNA-Aware Network Construction and Exploration
+Version: 0.99.0
+Authors@R: c(
+    person("Valeria", "Moriello", email = "val.moriello@studenti.unina.it", role = c("aut", "cre")),
+    person("Panagiotis", "Chouvardas", email = "panagiotis.chouvardas@dbmr.unibe.ch", comment = c(ORCID = "0000-0003-1527-3151"), role = "ctb"),
+    person("Roberta", "Esposito", email = "roberta.esposito@unibe.ch", comment = c(ORCID = "0000-0001-6644-3195"), role = "ctb"),
+    person("Dario", "Righelli", email = "dario.righelli@gmail.com", comment = c(ORCID = "0000-0003-1504-3583"), role = "aut")
+    )
+Description: Provides tools for the analysis of long non-coding RNA regulation
+    in single-cell transcriptomic data. LANCE supports data import and
+    preprocessing, construction of Seurat-based analysis objects, estimation
+    of gene expression specificity, and generation of pseudobulk expression
+    profiles. The package enables the reconstruction and exploration of
+    lncRNA-centered gene regulatory networks by integrating co-expression and
+    regulatory relationships, with particular emphasis on cell-type-specific
+    analyses and reusable workflows across biological datasets.
+License: Artistic-2.0
+Encoding: UTF-8
+Depends: R (>= 4.6.0)
+Imports:
+    DescTools,
+    dplyr,
+    edgeR,
+    GENIE3,
+    ggplot2,
+    ggpubr,
+    ggrepel,
+    grDevices,
+    graphics,
+    grid,
+    igraph,
+    Matrix,
+    methods,
+    Nebulosa,
+    scales,
+    Seurat,
+    SeuratObject,
+    stats,
+    utils
+Suggests:
+    scMRMA,
+    anndataR,
+    BiocStyle,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0),
+VignetteBuilder: knitr
+biocViews:
+    GeneExpression,
+    Network, 
+    Software, 
+    SingleCell, 
+    Transcriptomics, 
+    RNASeq, 
+    GeneRegulation, 
+    NetworkInference, 
+    Visualization
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Config/testthat/edition: 3
+URL: https://github.com/MargiSan/lncRNAs_project
+BugReports: https://github.com/MargiSan/lncRNAs_project/issues

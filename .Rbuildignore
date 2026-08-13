@@ -1,0 +1,14 @@
+^\.git$
+^\.github$
+^.*\.Rproj$
+^new_pipeline$
+^pipeline$
+^CRC_lncRNAs\.[Rr]md$
+^GC_lncRNAs\.[Rr]md$
+^LU_adc_lncRNAs\.[Rr]md$
+^PDAC_lncRNAs\.[Rr]md$
+^RCC_lncRNAs\.[Rr]md$
+^main_GC\.Rmd$
+^main_LU_adc\.Rmd$
+^main_PDAC\.Rmd$
+^main_RCC\.Rmd$

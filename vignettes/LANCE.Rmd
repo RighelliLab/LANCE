@@ -1,0 +1,216 @@
+---
+title: "LANCE workflow overview"
+author: "Valeria Moriello"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+vignette: >
+  %\VignetteIndexEntry{LANCE workflow overview}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(LANCE)
+```
+
+# Overview
+
+`LANCE` packages the functions that originally lived in `new_pipeline/functions.R` and the workflow documented in `new_pipeline/main.Rmd`.
+
+The original analysis has four main stages:
+
+1. import or construct Seurat objects from single-cell datasets;
+2. preprocess and annotate cells;
+3. quantify lncRNA cell-type specificity with Gini-based summaries; and
+4. aggregate epithelial tumor cells into pseudobulk profiles for GRN inference and integrated network analysis.
+
+This vignette shows a package-oriented version of that workflow using small illustrative inputs and function groups rather than project-specific hard-coded paths.
+
+# Example input objects
+
+The original notebook expects user-provided count matrices, metadata tables, GENCODE annotations, transcription-factor catalogs, and optional LncTarD annotations. For package use, provide those inputs explicitly.
+
+```{r toy-input}
+example_expression <- matrix(
+  c(
+    5, 4, 0,
+    3, 2, 1,
+    0, 2, 4,
+    6, 5, 1
+  ),
+  nrow = 4,
+  byrow = TRUE,
+  dimnames = list(c("LNC1", "LNC2", "TF1", "GENE1"), c("PB1", "PB2", "PB3"))
+)
+
+example_counts <- matrix(
+  c(
+    5, 4, 0,
+    2, 1, 1,
+    0, 3, 5,
+    8, 7, 2
+  ),
+  nrow = 4,
+  byrow = TRUE,
+  dimnames = dimnames(example_expression)
+)
+
+gencode <- data.frame(
+  SYMBOL = c("LNC1", "LNC2", "TF1", "GENE1"),
+  type = c("lncRNA", "lncRNA", "protein_coding", "protein_coding"),
+  stringsAsFactors = FALSE
+)
+
+human_tf <- data.frame(
+  HGNC.symbol = "TF1",
+  Is.TF. = "Yes",
+  stringsAsFactors = FALSE
+)
+```
+
+# Data import and Seurat preprocessing
+
+The package retains the original import helpers for both raw text matrices and `.h5ad` files.
+
+```{r import-workflow, eval=FALSE}
+obj <- load_txt_counts_to_seurat(
+  counts_file = "path/to/counts.tsv.gz",
+  meta_file = "path/to/metadata.tsv.gz"
+)
+
+obj_h5ad <- load_h5ad_to_seurat("path/to/dataset.h5ad")
+merged <- merge_seurat_objects(list(dataset1 = obj, dataset2 = obj_h5ad))
+merged <- seurat_preprocess(merged)
+```
+
+If scMRMA-based annotation is available in your environment, the same object can be prepared and annotated with:
+
+```{r annotation-workflow, eval=FALSE}
+tmp <- prepare_scrmra_input(merged)
+merged <- run_scrmra_annotation(tmp$obj, tmp$logcounts)
+plot_cell_types(merged, "Cell_type")
+```
+
+# Gini-based cell-type specificity analysis
+
+The original notebook computes DotPlot-based Gini coefficients after matching genes to GENCODE biotypes.
+
+```{r gini-workflow, eval=FALSE}
+gene_sets <- gene_biotype_matching(merged, gencode)
+lnc_gini <- compute_gini_pipeline(merged, gene_sets$lnc, "lncRNA")
+prot_gini <- compute_gini_pipeline(merged, gene_sets$prot, "protein_coding")
+plot_gini_results(rbind(lnc_gini, prot_gini), nrow(lnc_gini), nrow(prot_gini))
+```
+
+# Pseudobulk preparation
+
+Many downstream GRN functions operate on pseudobulk matrices and can be demonstrated without a Seurat object.
+
+```{r pseudobulk-summary}
+grn_gene_sets <- prepare_grn_gene_sets(example_expression, gencode)
+expression_statistics <- calculate_grn_expression_statistics(
+  expression_matrix = example_expression,
+  count_matrix = example_counts
+)
+expression_statistics
+```
+
+```{r correlation-summary}
+correlation_input <- prepare_grn_correlation_matrix(
+  expression_matrix = example_expression,
+  gene_sets = grn_gene_sets
+)
+
+spearman_matrix <- compute_grn_spearman_correlations(correlation_input$expression)
+summarize_grn_correlations(spearman_matrix)
+```
+
+# GRN candidate selection
+
+The CRC workflow combines expression filtering, curated TF regulators, GENIE3 importance scores, and Spearman support.
+
+```{r grn-filtering}
+detection_thresholds <- evaluate_grn_detection_thresholds(
+  expression_statistics = expression_statistics,
+  gene_sets = grn_gene_sets,
+  thresholds = c(1, 2)
+)
+detection_thresholds
+
+filtered <- apply_grn_expression_filter(
+  expression_matrix = example_expression,
+  count_matrix = example_counts,
+  expression_statistics = expression_statistics,
+  gene_sets = grn_gene_sets,
+  min_detected_pseudobulk = 1
+)
+
+prepare_genie3_regulators(
+  human_tf = human_tf,
+  filtered_gene_sets = filtered$gene_sets,
+  expression_matrix = filtered$expression
+)
+```
+
+A full GENIE3 run follows the same steps as in `new_pipeline/main.Rmd`, but with explicit user-supplied files and parameters rather than project-specific directories.
+
+```{r genie3-workflow, eval=FALSE}
+regulators <- prepare_genie3_regulators(human_tf, filtered$gene_sets, filtered$expression)
+weights <- GENIE3::GENIE3(
+  exprMatrix = as.matrix(filtered$expression),
+  regulators = regulators,
+  nTrees = 1000,
+  nCores = 4
+)
+integrated_edges <- integrate_genie3_spearman(weights, spearman_matrix)
+final_edges <- construct_final_grn(integrated_edges, genie3_cutoff = 0.01, spearman_threshold = 0.5)
+```
+
+# Integrated lncRNA-TF-PCG network analysis
+
+The package also keeps the later integrated-network workflow from the source notebook.
+
+```{r integrated-workflow, eval=FALSE}
+relationship_set <- infer_integrated_grn_relationships(
+  expression_matrix = filtered$expression,
+  spearman_matrix = spearman_matrix,
+  regulators = regulators,
+  targets = filtered$gene_sets$prot,
+  regulator_type = "TF",
+  target_type = "PCG",
+  edge_type = "TF_to_PCG"
+)
+
+filtered_relationships <- filter_integrated_grn_relationships(
+  relationship_set$edges,
+  genie3_quantile = 0.95,
+  spearman_threshold = 0.5
+)
+```
+
+From there you can:
+
+- merge interaction classes with `integrate_filtered_grn_interaction_classes()`;
+- annotate lncRNA-supported edges with `annotate_integrated_grn_with_lnctard()`;
+- summarize network structure with `analyze_integrated_grn_structure()` and `summarize_integrated_grn_cascades()`; and
+- explore or visualize neighborhoods with `build_integrated_grn_graph()`, `plot_integrated_grn()`, `explore_integrated_grn_gene()`, and `plot_integrated_grn_gene_neighborhood()`.
+
+# Notes on inputs and assumptions
+
+The original `new_pipeline/main.Rmd` made several project-level assumptions that are now explicit package inputs:
+
+- file paths are no longer hard coded;
+- the pipeline expects matching barcode identifiers across counts and metadata;
+- Seurat objects must contain the metadata columns required by each GRN configuration; and
+- external annotation resources such as GENCODE, Human TF, and LncTarD must be supplied by the user.
+
+These constraints are preserved in the package functions, but they now surface as documented arguments rather than hidden global state.
+
+# Session Info
+
+```{r sessinfo}
+sessionInfo()
+```
