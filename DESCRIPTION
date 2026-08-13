@@ -3,9 +3,10 @@ Title: LncRNA-Aware Network Construction and Exploration
 Version: 0.99.0
 Authors@R: c(
     person("Valeria", "Moriello", email = "val.moriello@studenti.unina.it", role = c("aut", "cre")),
-    person("Dario", "Righelli", email = "dario.righelli@gmail.com", role = "aut"),
-    person("Roberta", "Esposito", role = "ctb")
-)
+    person("Roberta", "Esposito", email = "roberta.esposito@unibe.ch", role = "ctb"),
+    person("Panagiotis", "Chouvardas", email = "panagiotis.chouvardas@dbmr.unibe.ch", role = "ctb"),
+    person("Dario", "Righelli", email = "dario.righelli@gmail.com", role = "aut")
+    )
 Description: Utilities extracted from the lncRNAs project for importing
     single-cell RNA-seq datasets, preparing Seurat objects, quantifying gene
     specificity, and constructing lncRNA-centered gene regulatory networks
