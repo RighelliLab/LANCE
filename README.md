@@ -27,4 +27,4 @@ remotes::install_local(".")
 
 ## Documentation
 
-See `vignettes/lncRNAs_project.Rmd` for a package-oriented walkthrough derived from `new_pipeline/main.Rmd`.
+See `vignettes/LANCE.Rmd` for a package-oriented walkthrough derived from `new_pipeline/main.Rmd`.
