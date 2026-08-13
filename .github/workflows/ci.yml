@@ -14,7 +14,7 @@ name: PR CMD check & BiocCheck
       - "man/**"
       - "tests/**"
       - "vignettes/**"
-      - "**.yml"
+      - ".github/workflows/ci.yml"
     branches:
       - pckg_devel
       - devel
