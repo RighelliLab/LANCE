@@ -31,6 +31,8 @@ name: PR CMD check & BiocCheck
 jobs:
   ci:
     uses: waldronlab/.github/.github/workflows/bioc-pr-cmdcheck-pkgdown.yml@devel
+    permissions:
+      contents: read
     with:
       enable_pkgdown: false
       enable_docker: false
