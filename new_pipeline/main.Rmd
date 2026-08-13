@@ -1839,7 +1839,7 @@ write.table(
 )
 ```
 
-### STEP 7B: Apply Selected Filtering Criteria
+### STEP 7B: Apply Selected Filtering Criteria and Compute Combined Edge Scores
 
 Based on the threshold sensitivity analysis, the final filtering criterion is
 applied independently to each interaction class.
@@ -1853,6 +1853,24 @@ For each class, interactions are retained when:
 Using class-specific GENIE3 quantiles accounts for differences in importance-score
 distributions across the four GENIE3 runs, while the Spearman threshold provides
 additional expression-based support for the inferred relationships.
+
+Before filtering, each GENIE3 importance score is also converted into a
+class-specific percentile score ranging from 0 to 1. The percentile represents
+the relative position of an edge within the complete GENIE3 distribution of its
+interaction class.
+
+A combined edge score is then calculated as:
+
+combined_score = genie3_percentile × |spearman_rho|
+
+The combined score therefore ranges from 0 to 1 and increases when an interaction
+has both high relative GENIE3 importance and strong absolute Spearman correlation.
+
+The combined score is not used to determine which interactions are retained.
+Network filtering continues to rely on the two independent GENIE3 and Spearman
+thresholds defined above. The original `genie3_weight` and signed `spearman_rho`
+values are preserved together with `genie3_percentile` and `combined_score` as
+separate edge attributes.
 
 The four filtered interaction classes are kept separate and saved independently.
 Their integration into a single regulatory network is performed in the next step.
@@ -1877,7 +1895,24 @@ filtered_tf_pcg <- filter_integrated_grn_relationships(
 )
 
 filtered_tf_pcg$summary
+filtered_tf_pcg$score_summary
+
 dim(filtered_tf_pcg$edges)
+
+head(
+  filtered_tf_pcg$edges[
+    ,
+    c(
+      "regulator",
+      "target",
+      "genie3_weight",
+      "genie3_percentile",
+      "spearman_rho",
+      "combined_score",
+      "edge_type"
+    )
+  ]
+)
 
 saveRDS(filtered_tf_pcg, file.path(grn_out_dir, "filtered_tf_pcg.rds"))
 
@@ -1897,7 +1932,24 @@ filtered_tf_lnc <- filter_integrated_grn_relationships(
 )
 
 filtered_tf_lnc$summary
+filtered_tf_lnc$score_summary
+
 dim(filtered_tf_lnc$edges)
+
+head(
+  filtered_tf_lnc$edges[
+    ,
+    c(
+      "regulator",
+      "target",
+      "genie3_weight",
+      "genie3_percentile",
+      "spearman_rho",
+      "combined_score",
+      "edge_type"
+    )
+  ]
+)
 
 saveRDS(filtered_tf_lnc, file.path(grn_out_dir, "filtered_tf_lnc.rds"))
 
@@ -1917,7 +1969,24 @@ filtered_lnc_pcg <- filter_integrated_grn_relationships(
 )
 
 filtered_lnc_pcg$summary
+filtered_lnc_pcg$score_summary
+
 dim(filtered_lnc_pcg$edges)
+
+head(
+  filtered_lnc_pcg$edges[
+    ,
+    c(
+      "regulator",
+      "target",
+      "genie3_weight",
+      "genie3_percentile",
+      "spearman_rho",
+      "combined_score",
+      "edge_type"
+    )
+  ]
+)
 
 saveRDS(filtered_lnc_pcg, file.path(grn_out_dir, "filtered_lnc_pcg.rds"))
 
@@ -1928,7 +1997,8 @@ gc()
 ```{r}
 # lncRNA → TF
 
-integrated_lnc_tf <- readRDS(file.path(grn_out_dir, "integrated_lnc_tf.rds"))
+integrated_lnc_tf <- readRDS(file.path(grn_out_dir, "integrated_lnc_tf.rds")
+)
 
 filtered_lnc_tf <- filter_integrated_grn_relationships(
   edges = integrated_lnc_tf$edges,
@@ -1937,7 +2007,24 @@ filtered_lnc_tf <- filter_integrated_grn_relationships(
 )
 
 filtered_lnc_tf$summary
+filtered_lnc_tf$score_summary
+
 dim(filtered_lnc_tf$edges)
+
+head(
+  filtered_lnc_tf$edges[
+    ,
+    c(
+      "regulator",
+      "target",
+      "genie3_weight",
+      "genie3_percentile",
+      "spearman_rho",
+      "combined_score",
+      "edge_type"
+    )
+  ]
+)
 
 saveRDS(filtered_lnc_tf, file.path(grn_out_dir, "filtered_lnc_tf.rds"))
 
@@ -1950,9 +2037,13 @@ gc()
 The filtering summaries from the four interaction classes are combined to verify
 the number and proportion of interactions retained by the selected criterion.
 
-Only filtering metadata are combined at this stage. The filtered interaction
-tables remain separate and will be merged into the integrated regulatory network
-in the next step.
+Combined-score summaries are also collected to inspect the distribution of the
+new edge weight across the four filtered interaction classes.
+
+The filtering summary and combined-score summary contain only metadata and
+distribution statistics. The complete filtered interaction tables remain
+separate and are stored in their corresponding RDS objects for integration in
+the next step.
 
 ```{r}
 integrated_filter_summary <- rbind(
@@ -1966,31 +2057,73 @@ integrated_filter_summary
 
 sum(integrated_filter_summary$retained_edges)
 
+integrated_combined_score_summary <- rbind(
+  filtered_tf_pcg$score_summary,
+  filtered_tf_lnc$score_summary,
+  filtered_lnc_pcg$score_summary,
+  filtered_lnc_tf$score_summary
+)
+
+integrated_combined_score_summary
+
 write.table(
   integrated_filter_summary,
-  file = file.path(grn_out_dir, "tables", "integrated_filter_summary.tsv"),
+  file = file.path(
+    grn_out_dir,
+    "tables",
+    "integrated_filter_summary.tsv"
+  ),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+write.table(
+  integrated_combined_score_summary,
+  file = file.path(
+    grn_out_dir,
+    "tables",
+    "integrated_combined_score_summary.tsv"
+  ),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
 )
 
 saveRDS(integrated_filter_summary, file.path(grn_out_dir, "integrated_filter_summary.rds"))
+
+saveRDS(integrated_combined_score_summary, file.path(grn_out_dir, "integrated_combined_score_summary.rds"))
 ```
+
+## STEP 8: Integrate Filtered Interaction Classes
 
 ## STEP 8: Integrate Filtered Interaction Classes
 
 Objective:
 
 - combine the four independently filtered interaction classes into a single integrated regulatory network
-- preserve GENIE3, Spearman, regulator-type, target-type, and interaction-class annotations
+- preserve the original GENIE3 and Spearman scores for every retained edge
+- preserve the class-specific GENIE3 percentile and combined edge score calculated in STEP 7B
+- preserve regulator-type, target-type, and interaction-class annotations
 - verify that no required edge information is missing after integration
+- verify that the combined edge score remains within the expected range
 - identify the complete set of nodes represented in the integrated network
 - assign each node to one of the three gene classes: lncRNA, TF, or PCG
+- calculate node-level in-degree, out-degree, and total degree
 - verify the consistency of node-type assignments before downstream annotation and network analysis
 
 Only interactions retained by the class-specific filtering procedure are integrated.
 
-No additional biological or visualization filter is applied at this step. 
+The original `genie3_weight` and signed `spearman_rho` values are preserved
+together with the class-specific `genie3_percentile` and the derived
+`combined_score`.
+
+The combined score was calculated in STEP 7B as:
+
+combined_score = genie3_percentile × |spearman_rho|
+
+No additional filtering, normalization, or score calculation is performed at
+this step.
 
 ```{r}
 filtered_tf_pcg <- readRDS(file.path(grn_out_dir, "filtered_tf_pcg.rds"))
@@ -2019,17 +2152,49 @@ integrated_grn$summary
 
 table(integrated_grn$edges$edge_type)
 
-table(integrated_grn$nodes$node_type, useNA = "ifany")
+table(
+  integrated_grn$nodes$node_type,
+  useNA = "ifany"
+)
 
 table(
   integrated_grn$edges$regulator_type,
   integrated_grn$edges$target_type
 )
 
-head(integrated_grn$edges)
+head(
+  integrated_grn$edges[
+    ,
+    c(
+      "regulator",
+      "target",
+      "genie3_weight",
+      "genie3_percentile",
+      "spearman_rho",
+      "combined_score",
+      "regulator_type",
+      "target_type",
+      "edge_type"
+    )
+  ]
+)
+
 head(integrated_grn$nodes)
 
 sum(is.na(integrated_grn$nodes$node_type))
+
+summary(integrated_grn$edges$genie3_percentile)
+summary(integrated_grn$edges$combined_score)
+
+range(
+  integrated_grn$edges$genie3_percentile,
+  na.rm = TRUE
+)
+
+range(
+  integrated_grn$edges$combined_score,
+  na.rm = TRUE
+)
 
 saveRDS(integrated_grn, file.path(grn_out_dir, "integrated_grn.rds"))
 
@@ -2074,10 +2239,13 @@ Objective:
 
 - annotate lncRNA-to-PCG and lncRNA-to-TF interactions in the integrated GRN using LncTarD
 - preserve all interactions already retained by the GRN filtering procedure
+- preserve the original GENIE3 and Spearman edge scores
+- preserve the class-specific GENIE3 percentile and combined edge score calculated in STEP 7B
 - identify exact directed lncRNA-target pairs reported in LncTarD
 - distinguish database-supported interactions from data-driven candidate interactions
 - record the number of LncTarD entries supporting each GRN interaction
 - preserve the corresponding LncTarD record identifiers for downstream interpretation
+- verify that LncTarD annotation does not modify or remove the previously calculated edge scores
 
 LncTarD is used only as an external annotation resource and does not determine
 which interactions are retained in the integrated GRN.
@@ -2086,8 +2254,21 @@ Matching is performed on the directed regulator-target pair. Therefore, a
 LncTarD interaction supports a GRN edge only when both regulator and target
 match in the same direction.
 
+The original `genie3_weight`, signed `spearman_rho`, class-specific
+`genie3_percentile`, and derived `combined_score` are preserved as independent
+edge attributes.
+
+LncTarD annotation adds three additional edge attributes:
+
+- `lnctard_supported`
+- `lnctard_records`
+- `lnctard_rids`
+
 Interactions not reported in LncTarD are retained in the network and remain
 putative data-driven candidates.
+
+No filtering, normalization, or edge-score recalculation is performed at this
+step.
 
 ```{r}
 integrated_grn <- readRDS(file.path(grn_out_dir, "integrated_grn.rds"))
@@ -2123,16 +2304,52 @@ table(
   lnctard_annotation$lnc_edges$lnctard_supported
 )
 
-head(lnctard_annotation$supported_edges)
+head(
+  lnctard_annotation$supported_edges[
+    ,
+    c(
+      "regulator",
+      "target",
+      "genie3_weight",
+      "genie3_percentile",
+      "spearman_rho",
+      "combined_score",
+      "edge_type",
+      "lnctard_supported",
+      "lnctard_records",
+      "lnctard_rids"
+    )
+  ]
+)
+
+# Verify preservation of the previously calculated edge scores.
+
+all(
+  c(
+    "genie3_weight",
+    "genie3_percentile",
+    "spearman_rho",
+    "combined_score"
+  ) %in% colnames(lnctard_annotation$edges)
+)
+
+sum(is.na(lnctard_annotation$edges$genie3_percentile))
+sum(is.na(lnctard_annotation$edges$combined_score))
+
+range(
+  lnctard_annotation$edges$genie3_percentile,
+  na.rm = TRUE
+)
+
+range(
+  lnctard_annotation$edges$combined_score,
+  na.rm = TRUE
+)
 
 integrated_grn$edges <- lnctard_annotation$edges
 
 saveRDS(integrated_grn, file.path(grn_out_dir, "integrated_grn_lnctard_annotated.rds"))
-
-saveRDS(
-  lnctard_annotation,
-  file.path(grn_out_dir, "integrated_grn_lnctard_annotation.rds")
-)
+saveRDS(lnctard_annotation, file.path(grn_out_dir, "integrated_grn_lnctard_annotation.rds"))
 
 write.table(
   lnctard_annotation$summary,
@@ -2162,24 +2379,35 @@ Objective:
 - quantify LncTarD-supported interactions in the final network
 - summarize major two-step lncRNA-TF-PCG regulatory cascades without materializing all global paths
 - construct a reusable directed graph representation of the complete integrated GRN
+- preserve all edge-level score and annotation attributes in the graph representation
+- preserve the original GENIE3 weight, class-specific GENIE3 percentile, signed Spearman correlation, and combined edge score
+- preserve LncTarD support information as graph edge attributes
 - prepare the network for whole-network visualization and gene-centered path exploration
 
 The network is analyzed without applying additional filtering.
+
+The `combined_score` calculated in STEP 7B is preserved as an edge attribute but
+is not used to modify the structural analysis performed at this step.
+
+The original `genie3_weight`, `genie3_percentile`, `spearman_rho`, and
+`combined_score` therefore remain independently accessible for every retained
+interaction.
 
 Global cascade analysis reports the number of compatible directed two-step paths
 without enumerating every individual path, avoiding unnecessary expansion of the
 complete network.
 
-The complete directed graph is preserved for downstream analysis. Individual
-paths are therefore explored on demand for a selected gene, direction, and
-maximum depth in STEP 12 rather than being globally enumerated.
+The complete directed graph is preserved for downstream analysis. All columns
+of the integrated edge table are transferred to the igraph object as edge
+attributes.
+
+Individual paths are therefore explored on demand for a selected gene,
+direction, and maximum depth in STEP 12 rather than being globally enumerated.
 
 Global network visualization is performed in STEP 11.
 
 ```{r}
-integrated_grn <- readRDS(
-  file.path(grn_out_dir, "integrated_grn_lnctard_annotated.rds")
-)
+integrated_grn <- readRDS(file.path(grn_out_dir, "integrated_grn_lnctard_annotated.rds"))
 
 grn_structure <- analyze_integrated_grn_structure(
   edges = integrated_grn$edges,
@@ -2215,28 +2443,52 @@ igraph::vcount(integrated_grn_graph)
 igraph::ecount(integrated_grn_graph)
 igraph::is_directed(integrated_grn_graph)
 
-saveRDS(
-  grn_structure,
-  file.path(grn_out_dir, "integrated_grn_structure.rds")
+igraph::edge_attr_names(integrated_grn_graph)
+
+all(
+  c(
+    "genie3_weight",
+    "genie3_percentile",
+    "spearman_rho",
+    "combined_score",
+    "edge_type",
+    "lnctard_supported",
+    "lnctard_records",
+    "lnctard_rids"
+  ) %in% igraph::edge_attr_names(integrated_grn_graph)
 )
 
-saveRDS(
-  grn_cascades,
-  file.path(grn_out_dir, "integrated_grn_cascade_summary.rds")
+summary(
+  igraph::edge_attr(
+    integrated_grn_graph,
+    "combined_score"
+  )
 )
 
-saveRDS(
-  integrated_grn_graph,
-  file.path(grn_out_dir, "integrated_grn_graph.rds")
+range(
+  igraph::edge_attr(
+    integrated_grn_graph,
+    "combined_score"
+  ),
+  na.rm = TRUE
 )
+
+sum(
+  is.na(
+    igraph::edge_attr(
+      integrated_grn_graph,
+      "combined_score"
+    )
+  )
+)
+
+saveRDS(grn_structure, file.path(grn_out_dir, "integrated_grn_structure.rds"))
+saveRDS(grn_cascades, file.path(grn_out_dir, "integrated_grn_cascade_summary.rds"))
+saveRDS(integrated_grn_graph, file.path(grn_out_dir, "integrated_grn_graph.rds"))
 
 write.table(
   grn_structure$network_summary,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_structure_summary.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_structure_summary.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2244,11 +2496,7 @@ write.table(
 
 write.table(
   grn_structure$node_type_summary,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_node_type_summary.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_node_type_summary.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2256,11 +2504,7 @@ write.table(
 
 write.table(
   grn_structure$edge_type_summary,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_edge_type_summary.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_edge_type_summary.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2268,11 +2512,7 @@ write.table(
 
 write.table(
   grn_structure$spearman_sign_summary,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_spearman_sign_summary.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_spearman_sign_summary.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2280,11 +2520,7 @@ write.table(
 
 write.table(
   grn_structure$lnctard_summary,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_lnctard_structure_summary.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_lnctard_structure_summary.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2292,11 +2528,7 @@ write.table(
 
 write.table(
   grn_structure$degree_table,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_node_degrees.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_node_degrees.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2304,11 +2536,7 @@ write.table(
 
 write.table(
   grn_structure$top_degree_nodes,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_top_degree_nodes.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_top_degree_nodes.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2316,11 +2544,7 @@ write.table(
 
 write.table(
   grn_structure$top_in_degree_nodes,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_top_in_degree_nodes.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_top_in_degree_nodes.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2328,11 +2552,7 @@ write.table(
 
 write.table(
   grn_structure$top_out_degree_nodes,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_top_out_degree_nodes.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_top_out_degree_nodes.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2340,11 +2560,7 @@ write.table(
 
 write.table(
   grn_cascades$summary,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_cascade_summary.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_cascade_summary.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2352,11 +2568,7 @@ write.table(
 
 write.table(
   grn_cascades$lncRNA_TF_PCG_by_TF,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_lncRNA_TF_PCG_by_TF.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_lncRNA_TF_PCG_by_TF.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2364,11 +2576,7 @@ write.table(
 
 write.table(
   grn_cascades$TF_lncRNA_PCG_by_lncRNA,
-  file = file.path(
-    grn_out_dir,
-    "tables",
-    "integrated_grn_TF_lncRNA_PCG_by_lncRNA.tsv"
-  ),
+  file = file.path(grn_out_dir, "tables", "integrated_grn_TF_lncRNA_PCG_by_lncRNA.tsv"),
   sep = "\t",
   quote = FALSE,
   row.names = FALSE
@@ -2384,6 +2592,8 @@ Objective:
 - distinguish lncRNA, TF, and PCG nodes
 - distinguish the four regulatory interaction classes
 - preserve the complete network structure generated in the previous steps
+- represent edge weight using the combined GENIE3-Spearman score
+- preserve the original GENIE3 and Spearman values as independent graph attributes
 - save a reusable network layout and the complete GRN visualization for downstream inspection
 
 The visualization includes the complete integrated network and does not select
@@ -2393,8 +2603,16 @@ Because the network contains a large number of nodes and edges, a layered
 representation is used to separate lncRNA, TF, and PCG nodes into distinct
 regions of the plotting space.
 
-Edge transparency and reduced graphical width are used only to limit overplotting.
-No nodes or edges are removed from the network.
+Edge color represents the regulatory interaction class, while edge width is
+proportional to the `combined_score` calculated in STEP 7B:
+
+combined_score = genie3_percentile × |spearman_rho|
+
+The original `genie3_weight`, `genie3_percentile`, signed `spearman_rho`, and
+`combined_score` remain stored as independent edge attributes in the graph.
+
+Edge transparency is used only to limit overplotting. No nodes or edges are
+removed from the network.
 
 Node labels are omitted from the global plot because displaying more than
 18,000 labels would obscure the overall network structure.
@@ -2411,17 +2629,38 @@ igraph::vcount(integrated_grn_graph)
 igraph::ecount(integrated_grn_graph)
 igraph::is_directed(integrated_grn_graph)
 
-table(igraph::vertex_attr(integrated_grn_graph, "node_type"))
+table(
+  igraph::vertex_attr(
+    integrated_grn_graph,
+    "node_type"
+  )
+)
 
-table(igraph::edge_attr(integrated_grn_graph, "edge_type"))
+table(
+  igraph::edge_attr(
+    integrated_grn_graph,
+    "edge_type"
+  )
+)
+
+summary(
+  igraph::edge_attr(
+    integrated_grn_graph,
+    "combined_score"
+  )
+)
 
 integrated_grn_plot <- plot_integrated_grn(
   graph = integrated_grn_graph,
   show_legend = TRUE,
   vertex_size = 0.8,
-  edge_width = 0.08,
+  edge_width_range = c(0.03, 0.15),
   edge_alpha = 0.04,
   arrow_size = 0
+)
+
+summary(
+  integrated_grn_plot$edge_widths
 )
 
 saveRDS(integrated_grn_plot$layout, file.path(grn_out_dir, "integrated_grn_layout.rds"))
@@ -2438,7 +2677,7 @@ plot_integrated_grn(
   layout = integrated_grn_plot$layout,
   show_legend = TRUE,
   vertex_size = 0.8,
-  edge_width = 0.08,
+  edge_width_range = c(0.03, 0.15),
   edge_alpha = 0.04,
   arrow_size = 0
 )
@@ -2464,13 +2703,21 @@ Objective:
 - retrieve the complete gene-centered subnetwork within the selected depth
 - retrieve edges connecting consecutive exploration levels
 - enumerate directed simple paths from the selected gene when requested
-- preserve GENIE3, Spearman, interaction-class, node-type, and LncTarD annotations
+- preserve GENIE3, Spearman, combined-score, interaction-class, node-type, and LncTarD annotations
 - visualize the depth-layer gene-centered network
+- optionally select the interaction classes displayed in the network
+- optionally display all edges, only LncTarD-supported edges, or only unsupported edges
+- optionally apply a minimum absolute Spearman correlation threshold to the visualization
+- represent the relative visual prominence of edges using the composite combined score
+- represent the sign of Spearman correlation using edge line type
+- preserve the exact GENIE3, Spearman, GENIE3-percentile, and combined scores of displayed edges for numerical inspection
+- automatically export each selected gene-centered visualization as a PDF with the exploration and visualization parameters recorded in the plot title and file name
 
 The exploration is performed on the complete filtered integrated GRN without
-applying additional biological filtering.
+recalculating the network.
 
-The selected gene, direction, and maximum depth are user-defined parameters.
+The selected gene, exploration direction, and maximum depth are user-defined
+parameters.
 
 Two complementary network representations are retained:
 
@@ -2482,6 +2729,36 @@ Two complementary network representations are retained:
 The layer network is used for depth-oriented visualization, while the complete
 induced subnetwork remains available for additional network analysis.
 
+Visualization parameters are applied only to the displayed layer network and
+do not modify the underlying integrated GRN or the gene exploration results.
+
+Interaction classes can be selected independently, LncTarD support can be used
+as an optional visualization filter, and a minimum absolute Spearman correlation
+threshold can be applied without recalculating the network.
+
+Edge color represents the regulatory interaction class.
+
+Edge width represents the composite visualization score calculated in STEP 7B:
+
+combined_score = genie3_percentile × |spearman_rho|
+
+The combined score is used only as a visualization and ranking attribute and
+does not replace the original GENIE3 importance or Spearman correlation values.
+
+The Spearman correlation sign is represented separately through edge line type:
+
+- solid edge = positive Spearman correlation
+- dashed edge = negative Spearman correlation
+
+The original `genie3_weight`, class-specific `genie3_percentile`, signed
+`spearman_rho`, and `combined_score` remain independently available for every
+displayed interaction.
+
+The generated PDF records the selected gene, exploration direction, depth,
+interaction classes, LncTarD filter, and optional Spearman visualization
+threshold. The same network layout used for the interactive R visualization is
+reused in the exported PDF.
+
 Neighborhood exploration and path enumeration are treated separately because
 the number of possible simple paths can increase rapidly with network depth.
 
@@ -2489,11 +2766,10 @@ CASC19 is used as the initial example, but the same workflow can be applied to
 any gene represented in the integrated GRN.
 
 ```{r}
-integrated_grn_graph <- readRDS(
-  file.path(grn_out_dir, "integrated_grn_graph.rds")
-)
+integrated_grn_graph <- readRDS(file.path(grn_out_dir, "integrated_grn_graph.rds"))
 
 # User-defined gene exploration parameters.
+
 selected_gene <- "CASC19"
 selected_direction <- "out"
 selected_depth <- 1
@@ -2502,10 +2778,24 @@ maximum_paths <- 100000
 
 # User-defined visualization parameters.
 # Use NULL to display all interaction classes.
-# Example:
+# Examples:
+# selected_edge_types <- NULL
 # selected_edge_types <- "lncRNA_to_TF"
 # selected_edge_types <- c("lncRNA_to_TF", "TF_to_PCG")
-selected_edge_types <- "lncRNA_to_TF"
+
+selected_edge_types <- NULL
+
+# LncTarD visualization filter:
+# "all" = display supported and unsupported edges
+# "supported" = display only LncTarD-supported edges
+# "unsupported" = display only edges without LncTarD support
+
+selected_lnctard_filter <- "all"
+
+# Optional minimum absolute Spearman correlation for visualization.
+# NULL applies no additional Spearman filtering.
+
+selected_min_abs_rho <- NULL
 
 gene_exploration <- explore_integrated_grn_gene(
   graph = integrated_grn_graph,
@@ -2516,43 +2806,37 @@ gene_exploration <- explore_integrated_grn_gene(
   max_paths = maximum_paths
 )
 
-# --------------------------------------------------------------------------
-# Numerical summaries
-# --------------------------------------------------------------------------
+# Numerical summaries.
 
 gene_exploration$summary
-
 gene_exploration$depth_summary
-
 gene_exploration$node_type_summary
 
 # Complete induced-subnetwork edge composition.
+
 gene_exploration$edge_type_summary
 
 # Depth-layer edge composition.
+
 gene_exploration$layer_edge_type_summary
 
-# --------------------------------------------------------------------------
-# Inspect reached nodes and edges
-# --------------------------------------------------------------------------
+# Inspect reached nodes and edges.
 
 dim(gene_exploration$nodes)
-
 dim(gene_exploration$edges)
-
 dim(gene_exploration$layer_edges)
 
 head(gene_exploration$nodes)
 
 # All edges among nodes reached within the selected depth.
+
 head(gene_exploration$edges)
 
 # Only edges connecting consecutive depth levels.
+
 head(gene_exploration$layer_edges)
 
-# --------------------------------------------------------------------------
-# Inspect simple paths
-# --------------------------------------------------------------------------
+# Inspect simple paths.
 
 if (!is.null(gene_exploration$paths)) {
   dim(gene_exploration$paths)
@@ -2561,39 +2845,160 @@ if (!is.null(gene_exploration$paths)) {
 
 gene_exploration$paths_truncated
 
-# --------------------------------------------------------------------------
-# Visualize the depth-layer network
-# --------------------------------------------------------------------------
+# Create plot title.
+
+selected_edge_types_label <- if (is.null(selected_edge_types)) {
+  "all"
+} else {
+  paste(selected_edge_types, collapse = ", ")
+}
+
+selected_rho_label <- if (is.null(selected_min_abs_rho)) {
+  "none"
+} else {
+  as.character(selected_min_abs_rho)
+}
+
+gene_plot_title <- paste0(
+  "Gene: ", selected_gene,
+  " | direction: ", selected_direction,
+  " | depth: ", selected_depth,
+  "\nEdge type: ", selected_edge_types_label,
+  " | LncTarD: ", selected_lnctard_filter,
+  " | min |rho|: ", selected_rho_label,
+  "\nEdge width: combined_score"
+)
+
+# Visualize the depth-layer network.
+# The layout is calculated once and then reused for PDF export.
 
 gene_exploration_plot <- plot_integrated_grn_gene_neighborhood(
   exploration = gene_exploration,
   show_labels = TRUE,
-  edge_types_to_show = selected_edge_types
+  edge_types_to_show = selected_edge_types,
+  lnctard_filter = selected_lnctard_filter,
+  min_abs_rho = selected_min_abs_rho,
+  vertex_size = 5,
+  selected_gene_size = 11,
+  edge_width_range = c(0.25, 1.6),
+  arrow_size = 0.15,
+  label_cex = 0.50,
+  layout = NULL,
+  layout_niter = 3000,
+  layout_scale = 2,
+  plot_title = gene_plot_title
 )
 
-# --------------------------------------------------------------------------
-# Save complete exploration object
-# --------------------------------------------------------------------------
+# Inspect displayed network and exact edge scores.
 
-saveRDS(
-  gene_exploration,
-  file.path(
-    grn_out_dir,
-    paste0(
-      "integrated_grn_",
-      selected_gene,
-      "_",
-      selected_direction,
-      "_depth",
-      selected_depth,
-      ".rds"
+gene_exploration_plot$displayed_edges
+gene_exploration_plot$displayed_nodes
+gene_exploration_plot$displayed_edge_types
+
+summary(
+  gene_exploration_plot$displayed_edge_scores$combined_score
+)
+
+summary(
+  gene_exploration_plot$edge_widths
+)
+
+head(
+  gene_exploration_plot$displayed_edge_scores,
+  20
+)
+
+gene_exploration_plot$displayed_edge_scores[
+  ,
+  c(
+    "regulator",
+    "target",
+    "edge_type",
+    "genie3_weight",
+    "genie3_percentile",
+    "spearman_rho",
+    "abs_spearman_rho",
+    "combined_score",
+    "lnctard_supported"
+  )
+]
+
+# Create informative PDF filename.
+
+selected_edge_types_filename <- if (is.null(selected_edge_types)) {
+  "all_edges"
+} else {
+  paste(selected_edge_types, collapse = "_")
+}
+
+selected_rho_filename <- if (is.null(selected_min_abs_rho)) {
+  "rho_all"
+} else {
+  paste0(
+    "rho_",
+    gsub(
+      "\\.",
+      "p",
+      as.character(selected_min_abs_rho)
     )
   )
+}
+
+gene_plot_filename <- paste0(
+  "grn_",
+  selected_gene,
+  "_",
+  selected_direction,
+  "_d",
+  selected_depth,
+  "_",
+  selected_edge_types_filename,
+  "_lnctard_",
+  selected_lnctard_filter,
+  "_",
+  selected_rho_filename,
+  ".pdf"
 )
 
-# --------------------------------------------------------------------------
-# Export summary
-# --------------------------------------------------------------------------
+# Save gene-centered network as PDF.
+# The same layout calculated for the interactive plot is reused so that
+# node positions remain identical between the RStudio view and the PDF.
+
+dir.create(file.path(grn_out_dir, "plots"), recursive = TRUE, showWarnings = FALSE)
+
+pdf(
+  file = file.path(grn_out_dir, "plots", gene_plot_filename),
+  width = 16,
+  height = 12,
+  onefile = FALSE
+)
+
+plot_integrated_grn_gene_neighborhood(
+  exploration = gene_exploration,
+  show_labels = TRUE,
+  edge_types_to_show = selected_edge_types,
+  lnctard_filter = selected_lnctard_filter,
+  min_abs_rho = selected_min_abs_rho,
+  vertex_size = 5,
+  selected_gene_size = 11,
+  edge_width_range = c(0.25, 1.6),
+  arrow_size = 0.15,
+  label_cex = 0.50,
+  layout = gene_exploration_plot$layout,
+  layout_niter = 3000,
+  layout_scale = 2,
+  plot_title = gene_plot_title
+)
+
+dev.off()
+
+file.exists(file.path(grn_out_dir, "plots", gene_plot_filename))
+
+# Save complete exploration object.
+
+saveRDS(gene_exploration, file.path(grn_out_dir, paste0("integrated_grn_", selected_gene, "_", selected_direction, "_depth", selected_depth, ".rds")))
+
+# Export summary.
 
 write.table(
   gene_exploration$summary,
@@ -2615,9 +3020,7 @@ write.table(
   row.names = FALSE
 )
 
-# --------------------------------------------------------------------------
-# Export reached nodes
-# --------------------------------------------------------------------------
+# Export reached nodes.
 
 write.table(
   gene_exploration$nodes,
@@ -2639,9 +3042,7 @@ write.table(
   row.names = FALSE
 )
 
-# --------------------------------------------------------------------------
-# Export complete induced-subnetwork edges
-# --------------------------------------------------------------------------
+# Export complete induced-subnetwork edges.
 
 write.table(
   gene_exploration$edges,
@@ -2663,9 +3064,7 @@ write.table(
   row.names = FALSE
 )
 
-# --------------------------------------------------------------------------
-# Export depth-layer edges
-# --------------------------------------------------------------------------
+# Export depth-layer edges.
 
 write.table(
   gene_exploration$layer_edges,
@@ -2687,11 +3086,10 @@ write.table(
   row.names = FALSE
 )
 
-# --------------------------------------------------------------------------
-# Export simple paths
-# --------------------------------------------------------------------------
+# Export simple paths.
 
 if (!is.null(gene_exploration$paths)) {
+  
   write.table(
     gene_exploration$paths,
     file = file.path(
@@ -2712,4 +3110,3 @@ if (!is.null(gene_exploration$paths)) {
     row.names = FALSE
   )
 }
-```
