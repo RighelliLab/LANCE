@@ -1,39 +1,296 @@
-name: PR CMD check & BiocCheck
+name: Bioconductor devel pre-submission CI
 
-"on":
+on:
   pull_request:
-    branches:
-      - pckg_devel
-      - devel
-      - "RELEASE_*"
-    paths:
-      - "DESCRIPTION"
-      - "NAMESPACE"
-      - "R/**"
-      - "man/**"
-      - "tests/**"
-      - "vignettes/**"
-      - ".github/workflows/ci.yml"
   push:
-    paths:
-      - "DESCRIPTION"
-      - "NAMESPACE"
-      - "R/**"
-      - "man/**"
-      - "tests/**"
-      - "vignettes/**"
-      - ".github/workflows/ci.yml"
     branches:
-      - pckg_devel
       - devel
-      - "RELEASE_*"
+      - 'RELEASE_*'
+  workflow_dispatch:
+
+env:
+  R_REMOTES_NO_ERRORS_FROM_WARNINGS: true
+  GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+  CRAN: https://p3m.dev/cran/__linux__/noble/latest
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
 jobs:
-  ci:
-    uses: waldronlab/.github/.github/workflows/bioc-pr-cmdcheck-pkgdown.yml@devel
+  set-matrix:
+    runs-on: ubuntu-24.04
+
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      dockerfile_exists: ${{ steps.dockerfile.outputs.exists }}
+      is_release_branch: ${{ steps.branch.outputs.is_release_branch }}
+      ref_name: ${{ steps.branch.outputs.ref_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine ref name and release branch status
+        id: branch
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            REF_NAME="${{ github.base_ref }}"
+          else
+            REF_NAME="${GITHUB_REF_NAME}"
+          fi
+
+          echo "ref_name=${REF_NAME}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${REF_NAME}" =~ ^RELEASE_ ]]; then
+            echo "is_release_branch=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release_branch=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set Bioconductor devel matrix
+        id: set
+        shell: bash
+        run: |
+          DOCKER_TAG="devel"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            CHECKOUT_REF="${{ github.event.pull_request.head.sha }}"
+          else
+            CHECKOUT_REF="${GITHUB_REF_NAME}"
+          fi
+
+          MATRIX="{\"include\":[{\"docker_tag\":\"${DOCKER_TAG}\",\"checkout_ref\":\"${CHECKOUT_REF}\"}]}"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+      - name: Check for Dockerfile
+        id: dockerfile
+        shell: bash
+        run: |
+          if [ -f "./inst/docker/pkg/Dockerfile" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+  check:
+    name: R CMD check + BiocCheck
+    needs: set-matrix
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.set-matrix.outputs.matrix) }}
+
+    container:
+      image: ghcr.io/bioconductor/bioconductor_docker:${{ matrix.docker_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.checkout_ref }}
+
+      - name: Query dependencies
+        shell: Rscript {0}
+        run: |
+          options(repos = c(CRAN = Sys.getenv("CRAN")))
+          BiocManager::install(
+            c("remotes", "rcmdcheck", "BiocCheck", "covr", "pkgdown"),
+            ask = FALSE,
+            update = FALSE
+          )
+          saveRDS(
+            remotes::dev_package_deps(dependencies = TRUE),
+            ".github/depends.Rds",
+            version = 2
+          )
+
+      - name: Cache R packages
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/R/site-library
+          key: ${{ runner.os }}-bioc-devel-${{ hashFiles('.github/depends.Rds') }}
+          restore-keys: |
+            ${{ runner.os }}-bioc-devel-
+
+      - name: Install dependencies
+        shell: Rscript {0}
+        run: |
+          options(repos = c(CRAN = Sys.getenv("CRAN")))
+          remotes::install_deps(
+            dependencies = TRUE,
+            repos = BiocManager::repositories()
+          )
+          BiocManager::install(
+            ask = FALSE,
+            update = TRUE
+          )
+
+      - name: Build package
+        shell: Rscript {0}
+        run: |
+          pkg_file <- devtools::build(
+            path = ".",
+            dest_path = "build",
+            binary = FALSE,
+            manual = FALSE,
+            vignettes = TRUE
+          )
+          cat("Built package:", pkg_file, "\n")
+
+      - name: R CMD check
+        shell: Rscript {0}
+        env:
+          _R_CHECK_CRAN_INCOMING_REMOTE_: false
+        run: |
+          rcmdcheck::rcmdcheck(
+            args = c("--no-manual", "--as-cran"),
+            error_on = "error",
+            check_dir = "check"
+          )
+
+      - name: Run BiocCheck
+        id: bioccheck
+        shell: Rscript {0}
+        run: |
+          tarball <- dir(
+            "check",
+            pattern = "\\.tar\\.gz$",
+            full.names = TRUE
+          )
+
+          if (length(tarball) == 0) {
+            tarball <- dir(
+              "build",
+              pattern = "\\.tar\\.gz$",
+              full.names = TRUE
+            )
+          }
+
+          stopifnot(length(tarball) >= 1)
+
+          BiocCheck::BiocCheck(
+            tarball[[1]],
+            `quit-with-status` = TRUE,
+            `no-check-bioc-help` = TRUE
+          )
+
+      - name: Test coverage
+        if: ${{ success() && github.ref == 'refs/heads/devel' && github.event_name != 'pull_request' }}
+        shell: Rscript {0}
+        run: |
+          cov <- covr::package_coverage(
+            quiet = FALSE,
+            clean = FALSE,
+            type = "all",
+            install_path = file.path(
+              normalizePath(Sys.getenv("RUNNER_TEMP"), winslash = "/"),
+              "package"
+            )
+          )
+
+          covr::to_cobertura(cov)
+
+      - name: Upload coverage to Codecov
+        if: ${{ success() && github.ref == 'refs/heads/devel' && github.event_name != 'pull_request' && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: false
+          file: ./cobertura.xml
+          plugin: noop
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Build pkgdown site
+        if: >-
+          ${{
+            github.event_name != 'pull_request'
+            && needs.set-matrix.outputs.is_release_branch == 'true'
+          }}
+        shell: bash
+        run: |
+          Rscript -e 'pkgdown::build_site()'
+
+      - name: Upload pkgdown artifact
+        if: >-
+          ${{
+            github.event_name != 'pull_request'
+            && needs.set-matrix.outputs.is_release_branch == 'true'
+          }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+
+  docker:
+    name: Build Docker image
+    needs:
+      - check
+      - set-matrix
+
+    runs-on: ubuntu-24.04
+
+    if: >-
+      ${{
+        github.ref == 'refs/heads/devel'
+        && github.event_name != 'pull_request'
+        && needs.set-matrix.outputs.dockerfile_exists == 'true'
+        && env.DOCKERHUB_USERNAME != ''
+        && env.DOCKERHUB_TOKEN != ''
+      }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Register repository name
+        shell: bash
+        run: |
+          echo "CONT_IMG_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./inst/docker/pkg/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.CONT_IMG_NAME }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.CONT_IMG_NAME }}:devel
+
+
+  deploy:
+    name: Deploy pkgdown to GitHub Pages
+    needs:
+      - check
+      - set-matrix
+
+    if: >-
+      ${{
+        github.event_name != 'pull_request'
+        && needs.set-matrix.outputs.is_release_branch == 'true'
+      }}
+
     permissions:
-      contents: read
-    with:
-      enable_pkgdown: false
-      enable_docker: false
-    secrets: inherit
+      contents: write
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
