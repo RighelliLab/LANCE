@@ -6,6 +6,14 @@ name: PR CMD check & BiocCheck
       - pckg_devel
       - devel
       - "RELEASE_*"
+    paths:
+      - "DESCRIPTION"
+      - "NAMESPACE"
+      - "R/**"
+      - "man/**"
+      - "tests/**"
+      - "vignettes/**"
+      - ".github/workflows/ci.yml"
   push:
     paths:
       - "DESCRIPTION"
