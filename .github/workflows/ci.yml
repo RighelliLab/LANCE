@@ -1,0 +1,25 @@
+name: PR CMD check & BiocCheck
+
+"on":
+  pull_request:
+  push:
+    paths:
+      - "DESCRIPTION"
+      - "NAMESPACE"
+      - "R/**"
+      - "man/**"
+      - "tests/**"
+      - "vignettes/**"
+      - "**.yml"
+    branches:
+      - pckg_devel
+      - devel
+      - "RELEASE_*"
+
+jobs:
+  ci:
+    uses: waldronlab/.github/.github/workflows/bioc-pr-cmdcheck-pkgdown.yml@devel
+    with:
+      enable_pkgdown: false
+      enable_docker: false
+    secrets: inherit
