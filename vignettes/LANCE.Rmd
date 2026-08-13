@@ -208,3 +208,9 @@ The original `new_pipeline/main.Rmd` made several project-level assumptions that
 - external annotation resources such as GENCODE, Human TF, and LncTarD must be supplied by the user.
 
 These constraints are preserved in the package functions, but they now surface as documented arguments rather than hidden global state.
+
+# Session Info
+
+```{r sessinfo}
+sessionInfo()
+```
