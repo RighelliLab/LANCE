@@ -14,7 +14,7 @@ The package provides utilities for:
 ## Installation
 
 ```r
-remotes::install_local(".")
+BiocManager::install("MargiSan/lncRNAs_project", ref="pckg_devel")
 ```
 
 ## Main workflow areas
