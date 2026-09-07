@@ -10430,19 +10430,22 @@ prepare_leiden_functional_gene_sets <- function(
 }
 
 # ------------------------------------------------------------------------------
-# FUNCTION: perform_leiden_go_bp_enrichment
+# FUNCTION: perform_leiden_go_enrichment
 # ------------------------------------------------------------------------------
 
-# Perform GO Biological Process enrichment independently for each Leiden community.
+# Perform Gene Ontology enrichment independently for each Leiden community.
 #
 # This function:
-# - uses the complete TF + PCG gene sets prepared in STEP 16A
-# - defines the enrichment universe from all TF + PCG genes in the integrated GRN
+# - uses the complete TF + PCG gene sets prepared for functional analysis
+# - defines the enrichment universe from all TF + PCG genes represented in the GRN
 # - maps gene symbols to Entrez Gene identifiers
-# - performs GO Biological Process enrichment independently for every community
-# - applies Benjamini-Hochberg multiple-testing correction
-# - retains the complete enrichment output returned for each community
-# - annotates statistical significance without filtering enrichment results
+# - performs GO enrichment independently for every community
+# - supports Biological Process (BP), Molecular Function (MF),
+#   and Cellular Component (CC)
+# - allows one or multiple GO ontologies to be analysed in the same call
+# - applies multiple-testing correction independently within each enrichment
+# - retains the complete enrichment output
+# - annotates statistical significance without filtering the stored results
 # - records gene-mapping statistics for every community
 #
 # INPUT:
@@ -10450,37 +10453,40 @@ prepare_leiden_functional_gene_sets <- function(
 #     named list containing TF + PCG gene symbols for each Leiden community
 #
 # - universe_genes:
-#     complete set of TF + PCG gene symbols represented in the integrated GRN
+#     complete set of TF + PCG gene symbols represented in the GRN
+#
+# - ontologies:
+#     one or more GO ontologies among:
+#       "BP" = Biological Process
+#       "MF" = Molecular Function
+#       "CC" = Cellular Component
 #
 # - p_adjust_method:
 #     multiple-testing correction method passed to enrichGO()
 #
 # - significance_cutoff:
-#     adjusted p-value threshold used only to annotate significant GO terms
+#     adjusted p-value threshold used to annotate significant GO terms
 #
 # OUTPUT:
 # - list containing:
-#
-#   - enrichment_results:
-#       named list containing the complete enrichment table for each community
-#
-#   - combined_results:
-#       complete enrichment results from all communities in one table
-#
-#   - mapping_summary:
-#       gene-symbol to Entrez-ID mapping statistics for each community
-#
-#   - universe_mapping:
-#       mapping table for the complete network-specific enrichment universe
+#   - results_by_ontology
+#   - combined_results
+#   - mapping_summary
+#   - universe_mapping
 #
 # ------------------------------------------------------------------------------
 
-perform_leiden_go_bp_enrichment <- function(
+perform_leiden_go_enrichment <- function(
     enrichment_gene_sets,
     universe_genes,
+    ontologies = c("BP"),
     p_adjust_method = "BH",
     significance_cutoff = 0.05
 ) {
+  
+  # --------------------------------------------------------------------------
+  # Validate input
+  # --------------------------------------------------------------------------
   
   if (!is.list(enrichment_gene_sets)) {
     stop("enrichment_gene_sets must be a list")
@@ -10498,13 +10504,34 @@ perform_leiden_go_bp_enrichment <- function(
     stop("universe_genes is empty")
   }
   
+  valid_ontologies <- c("BP", "MF", "CC")
+  
+  ontologies <- unique(
+    toupper(ontologies)
+  )
+  
+  invalid_ontologies <- setdiff(
+    ontologies,
+    valid_ontologies
+  )
+  
+  if (length(invalid_ontologies) > 0L) {
+    stop(
+      "Invalid GO ontology: ",
+      paste(invalid_ontologies, collapse = ", "),
+      ". Allowed values are: BP, MF, CC."
+    )
+  }
+  
   if (
     !is.numeric(significance_cutoff) ||
     length(significance_cutoff) != 1L ||
     significance_cutoff <= 0 ||
     significance_cutoff >= 1
   ) {
-    stop("significance_cutoff must be a numeric value between 0 and 1")
+    stop(
+      "significance_cutoff must be a numeric value between 0 and 1"
+    )
   }
   
   if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
@@ -10514,6 +10541,10 @@ perform_leiden_go_bp_enrichment <- function(
   if (!requireNamespace("org.Hs.eg.db", quietly = TRUE)) {
     stop("Package 'org.Hs.eg.db' is required")
   }
+  
+  # --------------------------------------------------------------------------
+  # Prepare enrichment universe
+  # --------------------------------------------------------------------------
   
   universe_genes <- unique(
     universe_genes[
@@ -10538,10 +10569,17 @@ perform_leiden_go_bp_enrichment <- function(
   )
   
   if (length(universe_entrez) == 0L) {
-    stop("No universe genes could be mapped to Entrez Gene identifiers")
+    stop(
+      "No universe genes could be mapped to Entrez Gene identifiers"
+    )
   }
   
-  enrichment_results <- list()
+  # --------------------------------------------------------------------------
+  # Map community gene sets once
+  # --------------------------------------------------------------------------
+  
+  community_mappings <- list()
+  community_entrez_sets <- list()
   mapping_summary_list <- list()
   
   for (community_name in names(enrichment_gene_sets)) {
@@ -10573,10 +10611,15 @@ perform_leiden_go_bp_enrichment <- function(
       universe_entrez
     )
     
+    community_mappings[[community_name]] <- community_mapping
+    community_entrez_sets[[community_name]] <- community_entrez
+    
     mapping_summary_list[[community_name]] <- data.frame(
       community = community_name,
       input_genes = length(community_genes),
-      mapped_symbols = length(unique(community_mapping$SYMBOL)),
+      mapped_symbols = length(
+        unique(community_mapping$SYMBOL)
+      ),
       mapped_entrez = length(community_entrez),
       unmapped_symbols = length(
         setdiff(
@@ -10584,53 +10627,11 @@ perform_leiden_go_bp_enrichment <- function(
           unique(community_mapping$SYMBOL)
         )
       ),
-      mapping_fraction = length(unique(community_mapping$SYMBOL)) /
+      mapping_fraction =
+        length(unique(community_mapping$SYMBOL)) /
         length(community_genes),
       stringsAsFactors = FALSE
     )
-    
-    if (length(community_entrez) == 0L) {
-      
-      enrichment_results[[community_name]] <- data.frame()
-      
-      next
-    }
-    
-    enrichment <- clusterProfiler::enrichGO(
-      gene = community_entrez,
-      universe = universe_entrez,
-      OrgDb = org.Hs.eg.db::org.Hs.eg.db,
-      keyType = "ENTREZID",
-      ont = "BP",
-      pAdjustMethod = p_adjust_method,
-      pvalueCutoff = 1,
-      qvalueCutoff = 1,
-      readable = TRUE
-    )
-    
-    enrichment_table <- as.data.frame(
-      enrichment
-    )
-    
-    if (nrow(enrichment_table) > 0L) {
-      
-      enrichment_table$community <- community_name
-      
-      enrichment_table$significant <- (
-        enrichment_table$p.adjust <= significance_cutoff
-      )
-      
-      enrichment_table <- enrichment_table[
-        order(
-          enrichment_table$p.adjust,
-          enrichment_table$pvalue
-        ),
-        ,
-        drop = FALSE
-      ]
-    }
-    
-    enrichment_results[[community_name]] <- enrichment_table
   }
   
   mapping_summary <- do.call(
@@ -10640,19 +10641,110 @@ perform_leiden_go_bp_enrichment <- function(
   
   rownames(mapping_summary) <- NULL
   
-  nonempty_results <- enrichment_results[
-    vapply(
-      enrichment_results,
-      nrow,
-      integer(1)
-    ) > 0L
-  ]
+  # --------------------------------------------------------------------------
+  # Perform enrichment independently for each requested ontology
+  # --------------------------------------------------------------------------
   
-  if (length(nonempty_results) > 0L) {
+  results_by_ontology <- list()
+  all_combined_results <- list()
+  
+  for (ontology in ontologies) {
+    
+    enrichment_results <- list()
+    
+    for (community_name in names(community_entrez_sets)) {
+      
+      community_entrez <-
+        community_entrez_sets[[community_name]]
+      
+      if (length(community_entrez) == 0L) {
+        
+        enrichment_results[[community_name]] <- data.frame()
+        
+        next
+      }
+      
+      enrichment <- clusterProfiler::enrichGO(
+        gene = community_entrez,
+        universe = universe_entrez,
+        OrgDb = org.Hs.eg.db::org.Hs.eg.db,
+        keyType = "ENTREZID",
+        ont = ontology,
+        pAdjustMethod = p_adjust_method,
+        pvalueCutoff = 1,
+        qvalueCutoff = 1,
+        readable = TRUE
+      )
+      
+      enrichment_table <- as.data.frame(
+        enrichment
+      )
+      
+      if (nrow(enrichment_table) > 0L) {
+        
+        enrichment_table$community <- community_name
+        
+        enrichment_table$ontology <- ontology
+        
+        enrichment_table$significant <- (
+          enrichment_table$p.adjust <= significance_cutoff
+        )
+        
+        enrichment_table <- enrichment_table[
+          order(
+            enrichment_table$p.adjust,
+            enrichment_table$pvalue
+          ),
+          ,
+          drop = FALSE
+        ]
+      }
+      
+      enrichment_results[[community_name]] <-
+        enrichment_table
+    }
+    
+    nonempty_results <- enrichment_results[
+      vapply(
+        enrichment_results,
+        nrow,
+        integer(1)
+      ) > 0L
+    ]
+    
+    if (length(nonempty_results) > 0L) {
+      
+      combined_results <- do.call(
+        rbind,
+        nonempty_results
+      )
+      
+      rownames(combined_results) <- NULL
+      
+    } else {
+      
+      combined_results <- data.frame()
+    }
+    
+    results_by_ontology[[ontology]] <- list(
+      enrichment_results = enrichment_results,
+      combined_results = combined_results
+    )
+    
+    if (nrow(combined_results) > 0L) {
+      all_combined_results[[ontology]] <- combined_results
+    }
+  }
+  
+  # --------------------------------------------------------------------------
+  # Combine results from all requested ontologies
+  # --------------------------------------------------------------------------
+  
+  if (length(all_combined_results) > 0L) {
     
     combined_results <- do.call(
       rbind,
-      nonempty_results
+      all_combined_results
     )
     
     rownames(combined_results) <- NULL
@@ -10662,9 +10754,14 @@ perform_leiden_go_bp_enrichment <- function(
     combined_results <- data.frame()
   }
   
+  # --------------------------------------------------------------------------
+  # Return
+  # --------------------------------------------------------------------------
+  
   return(
     list(
-      enrichment_results = enrichment_results,
+      ontologies = ontologies,
+      results_by_ontology = results_by_ontology,
       combined_results = combined_results,
       mapping_summary = mapping_summary,
       universe_mapping = universe_mapping
@@ -10673,34 +10770,37 @@ perform_leiden_go_bp_enrichment <- function(
 }
 
 # ------------------------------------------------------------------------------
-# FUNCTION: summarize_leiden_go_bp_enrichment
+# FUNCTION: summarize_leiden_go_enrichment
 # ------------------------------------------------------------------------------
 
-# Summarize GO Biological Process enrichment results across Leiden communities.
+# Summarize Gene Ontology enrichment results across Leiden communities.
 #
 # This function:
-# - uses the complete enrichment results generated in STEP 16B
+# - works with BP, MF, or CC enrichment results
 # - preserves all Leiden communities
-# - counts total and significant GO BP terms per community
-# - calculates the proportion of significant GO BP terms
-# - identifies the GO BP term with the lowest adjusted p-value
+# - counts total and significant GO terms per community
+# - calculates the proportion of significant GO terms
+# - identifies the GO term with the lowest adjusted p-value
 # - does not apply additional filtering or top-N selection
-#
-# INPUT:
-# - combined_results:
-#     complete GO BP enrichment results from STEP 16B
-# - mapping_summary:
-#     SYMBOL-to-ENTREZID mapping summary from STEP 16B
-#
-# OUTPUT:
-# - data.frame containing one row per Leiden community
 #
 # ------------------------------------------------------------------------------
 
-summarize_leiden_go_bp_enrichment <- function(
+summarize_leiden_go_enrichment <- function(
     combined_results,
-    mapping_summary
+    mapping_summary,
+    ontology
 ) {
+  
+  ontology <- toupper(ontology)
+  
+  valid_ontologies <- c("BP", "MF", "CC")
+  
+  if (!ontology %in% valid_ontologies) {
+    stop(
+      "ontology must be one of: ",
+      paste(valid_ontologies, collapse = ", ")
+    )
+  }
   
   required_result_columns <- c(
     "community",
@@ -10772,9 +10872,10 @@ summarize_leiden_go_bp_enrichment <- function(
       }
       
       data.frame(
+        ontology = ontology,
         community = comm,
-        total_go_bp_terms = n_terms,
-        significant_go_bp_terms = n_significant,
+        total_go_terms = n_terms,
+        significant_go_terms = n_significant,
         proportion_significant = proportion_significant,
         best_go_id = best_go_id,
         best_go_description = best_go_description,
@@ -10784,22 +10885,982 @@ summarize_leiden_go_bp_enrichment <- function(
     }
   )
   
-  enrichment_summary <- do.call(
+  summary_table <- do.call(
     rbind,
     summary_list
   )
   
-  enrichment_summary <- merge(
-    mapping_summary,
-    enrichment_summary,
-    by = "community",
-    all.x = TRUE,
-    sort = TRUE
+  rownames(summary_table) <- NULL
+  
+  return(summary_table)
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: get_go_background_size
+# ------------------------------------------------------------------------------
+
+# Extract the effective GO background size from enrichment results.
+#
+# clusterProfiler reports the ontology-specific enrichment background through
+# the denominator of the BgRatio column. Because the effective annotation
+# background may differ among GO ontologies, this function retrieves that
+# value directly from the enrichment output rather than assuming that the
+# same background is shared by BP, MF, and CC.
+#
+# Parameters:
+# - enrichment_results: data frame containing GO enrichment results for one
+#   ontology
+#
+# Returns:
+# - an integer representing the effective background size
+# - NA_integer_ if no valid BgRatio value is available
+#
+# ------------------------------------------------------------------------------
+
+get_go_background_size <- function(
+    enrichment_results
+) {
+  
+  if (!is.data.frame(enrichment_results)) {
+    stop("enrichment_results must be a data.frame")
+  }
+  
+  if (
+    nrow(enrichment_results) == 0L ||
+    !"BgRatio" %in% colnames(enrichment_results)
+  ) {
+    return(NA_integer_)
+  }
+  
+  valid_background_ratios <- enrichment_results$BgRatio[
+    !is.na(enrichment_results$BgRatio)
+  ]
+  
+  if (length(valid_background_ratios) == 0L) {
+    return(NA_integer_)
+  }
+  
+  background_ratio <- as.character(
+    valid_background_ratios[1]
   )
   
-  rownames(enrichment_summary) <- NULL
+  if (!grepl("/", background_ratio, fixed = TRUE)) {
+    return(NA_integer_)
+  }
   
-  return(enrichment_summary)
+  as.integer(
+    sub(
+      ".*/",
+      "",
+      background_ratio
+    )
+  )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: compute_go_coverage
+# ------------------------------------------------------------------------------
+
+# Compute gene-mapping and ontology coverage statistics for GO enrichment.
+#
+# This function:
+# - starts from the gene-mapping summary generated during GO enrichment
+# - evaluates, for each Leiden community, how many mapped genes are effectively
+#   represented in the selected GO ontology
+# - extracts the tested-gene denominator from GeneRatio
+# - extracts the ontology-specific background size from BgRatio
+# - quantifies losses occurring during SYMBOL-to-ENTREZ conversion and
+#   ontology annotation
+# - works with any GO ontology (BP, MF, or CC)
+#
+# Parameters:
+# - enrichment_results: data frame containing GO enrichment results for one
+#   ontology
+# - mapping_summary: data frame summarizing SYMBOL-to-ENTREZ mapping for each
+#   community
+# - ontology: ontology label, typically "BP", "MF", or "CC"
+#
+# Returns:
+# - a data frame containing one row per community with mapping and coverage
+#   statistics
+#
+# ------------------------------------------------------------------------------
+
+compute_go_coverage <- function(
+    enrichment_results,
+    mapping_summary,
+    ontology
+) {
+  
+  if (!is.data.frame(enrichment_results)) {
+    stop("enrichment_results must be a data.frame")
+  }
+  
+  if (!is.data.frame(mapping_summary)) {
+    stop("mapping_summary must be a data.frame")
+  }
+  
+  ontology <- toupper(ontology)
+  
+  if (!ontology %in% c("BP", "MF", "CC")) {
+    stop("ontology must be one of: BP, MF, CC")
+  }
+  
+  coverage <- mapping_summary
+  coverage$ontology <- ontology
+  
+  coverage$go_tested_genes <- vapply(
+    coverage$community,
+    function(current_community) {
+      
+      current_results <- enrichment_results[
+        enrichment_results$community == current_community,
+        ,
+        drop = FALSE
+      ]
+      
+      if (
+        nrow(current_results) == 0L ||
+        !"GeneRatio" %in% colnames(current_results)
+      ) {
+        return(NA_integer_)
+      }
+      
+      as.integer(
+        sub(
+          ".*/",
+          "",
+          as.character(current_results$GeneRatio[1])
+        )
+      )
+    },
+    integer(1)
+  )
+  
+  coverage$go_background_genes <- vapply(
+    coverage$community,
+    function(current_community) {
+      
+      current_results <- enrichment_results[
+        enrichment_results$community == current_community,
+        ,
+        drop = FALSE
+      ]
+      
+      if (
+        nrow(current_results) == 0L ||
+        !"BgRatio" %in% colnames(current_results)
+      ) {
+        return(NA_integer_)
+      }
+      
+      as.integer(
+        sub(
+          ".*/",
+          "",
+          as.character(current_results$BgRatio[1])
+        )
+      )
+    },
+    integer(1)
+  )
+  
+  coverage$symbol_to_entrez_loss <- (
+    coverage$input_genes -
+      coverage$mapped_symbols
+  )
+  
+  coverage$entrez_to_go_loss <- (
+    coverage$mapped_entrez -
+      coverage$go_tested_genes
+  )
+  
+  coverage$total_loss <- (
+    coverage$input_genes -
+      coverage$go_tested_genes
+  )
+  
+  coverage$go_coverage_fraction <- (
+    coverage$go_tested_genes /
+      coverage$input_genes
+  )
+  
+  coverage
+}
+
+
+# ------------------------------------------------------------------------------
+# FUNCTION: compute_go_coverage_by_ontology
+# ------------------------------------------------------------------------------
+
+# Compute GO coverage statistics for multiple ontologies.
+#
+# This function:
+# - iterates over the requested GO ontologies
+# - applies compute_go_coverage() independently to each ontology
+# - preserves ontology-specific enrichment results and coverage statistics
+# - returns a named list indexed by ontology
+#
+# Parameters:
+# - go_results: named list containing one enrichment result table per ontology
+# - mapping_summary: data frame summarizing SYMBOL-to-ENTREZ mapping for each
+#   Leiden community
+# - ontologies: character vector specifying the GO ontologies to analyse,
+#   typically any combination of "BP", "MF", and "CC"
+#
+# Returns:
+# - a named list containing one GO coverage data frame per ontology
+#
+# ------------------------------------------------------------------------------
+
+compute_go_coverage_by_ontology <- function(
+    go_results,
+    mapping_summary,
+    ontologies = names(go_results)
+) {
+  
+  if (!is.list(go_results)) {
+    stop("go_results must be a list")
+  }
+  
+  if (!is.data.frame(mapping_summary)) {
+    stop("mapping_summary must be a data.frame")
+  }
+  
+  ontologies <- unique(
+    toupper(ontologies)
+  )
+  
+  valid_ontologies <- c(
+    "BP",
+    "MF",
+    "CC"
+  )
+  
+  if (!all(ontologies %in% valid_ontologies)) {
+    stop(
+      "ontologies must contain only: ",
+      paste(valid_ontologies, collapse = ", ")
+    )
+  }
+  
+  missing_ontologies <- setdiff(
+    ontologies,
+    names(go_results)
+  )
+  
+  if (length(missing_ontologies) > 0L) {
+    stop(
+      "Missing enrichment results for: ",
+      paste(missing_ontologies, collapse = ", ")
+    )
+  }
+  
+  coverage_results <- lapply(
+    ontologies,
+    function(current_ontology) {
+      
+      compute_go_coverage(
+        enrichment_results =
+          go_results[[current_ontology]],
+        mapping_summary =
+          mapping_summary,
+        ontology =
+          current_ontology
+      )
+    }
+  )
+  
+  names(coverage_results) <- ontologies
+  
+  coverage_results
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: extract_go_results_by_ontology
+# ------------------------------------------------------------------------------
+
+# Extract ontology-specific result tables from a multi-ontology GO analysis.
+#
+# Parameters:
+# - go_enrichment: output generated by perform_leiden_go_enrichment()
+#
+# Returns:
+# - named list containing one combined enrichment table per ontology
+#
+# ------------------------------------------------------------------------------
+
+extract_go_results_by_ontology <- function(
+    go_enrichment
+) {
+  
+  ontologies <- go_enrichment$ontologies
+  
+  results <- lapply(
+    ontologies,
+    function(current_ontology) {
+      
+      go_enrichment$
+        results_by_ontology[[current_ontology]]$
+        combined_results
+    }
+  )
+  
+  names(results) <- ontologies
+  
+  results
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: summarize_go_enrichment_by_ontology
+# ------------------------------------------------------------------------------
+
+# Summarize Leiden GO enrichment results independently for each ontology.
+#
+# Parameters:
+# - go_results: named list containing ontology-specific enrichment tables
+# - mapping_summary: community-level SYMBOL-to-ENTREZ mapping summary
+#
+# Returns:
+# - named list containing one enrichment summary per ontology
+#
+# ------------------------------------------------------------------------------
+
+summarize_go_enrichment_by_ontology <- function(
+    go_results,
+    mapping_summary
+) {
+  
+  ontologies <- names(go_results)
+  
+  summaries <- lapply(
+    ontologies,
+    function(current_ontology) {
+      
+      summarize_leiden_go_enrichment(
+        combined_results =
+          go_results[[current_ontology]],
+        mapping_summary =
+          mapping_summary,
+        ontology =
+          current_ontology
+      )
+    }
+  )
+  
+  names(summaries) <- ontologies
+  
+  summaries
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: extract_gene_community_go_results
+# ------------------------------------------------------------------------------
+
+# Extract GO enrichment results for the Leiden community containing a
+# selected gene.
+#
+# This function:
+# - identifies the Leiden community containing the selected gene
+# - extracts ontology-specific enrichment results for that community
+# - retains both complete and significant enrichment results
+# - orders significant terms by adjusted p-value
+#
+# Parameters:
+# - gene: gene symbol of interest
+# - node_assignment: Leiden node-assignment data frame
+# - go_results: named list containing ontology-specific enrichment tables
+#
+# Returns:
+# - list containing the selected community, complete ontology-specific
+#   results, and significant ontology-specific results
+#
+# ------------------------------------------------------------------------------
+
+extract_gene_community_go_results <- function(
+    gene,
+    node_assignment,
+    go_results
+) {
+  
+  gene_community <- unique(
+    node_assignment$leiden_community[
+      node_assignment$gene == gene
+    ]
+  )
+  
+  if (length(gene_community) == 0L) {
+    stop("Selected gene was not found in node_assignment")
+  }
+  
+  if (length(gene_community) != 1L) {
+    stop("Selected gene is associated with more than one Leiden community")
+  }
+  
+  community_label <- paste0(
+    "community_",
+    gene_community
+  )
+  
+  community_results <- lapply(
+    go_results,
+    function(current_results) {
+      
+      current_results[
+        current_results$community == community_label,
+        ,
+        drop = FALSE
+      ]
+    }
+  )
+  
+  significant_results <- lapply(
+    community_results,
+    function(current_results) {
+      
+      if (nrow(current_results) == 0L) {
+        return(current_results)
+      }
+      
+      significant <- current_results[
+        current_results$significant,
+        ,
+        drop = FALSE
+      ]
+      
+      significant[
+        order(significant$p.adjust),
+        ,
+        drop = FALSE
+      ]
+    }
+  )
+  
+  list(
+    gene = gene,
+    community = gene_community,
+    community_label = community_label,
+    results = community_results,
+    significant_results = significant_results
+  )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: compute_go_universe_coverage
+# ------------------------------------------------------------------------------
+
+# Compute ontology-specific coverage statistics for the enrichment universe.
+#
+# Parameters:
+# - universe_genes: input enrichment-universe gene symbols
+# - universe_mapping: SYMBOL-to-ENTREZ mapping table for the universe
+# - go_results: named list containing ontology-specific enrichment tables
+#
+# Returns:
+# - data frame containing universe coverage statistics for each ontology
+#
+# ------------------------------------------------------------------------------
+
+compute_go_universe_coverage <- function(
+    universe_genes,
+    universe_mapping,
+    go_results
+) {
+  
+  ontologies <- names(go_results)
+  
+  mapped_entrez <- length(
+    unique(
+      universe_mapping$ENTREZID[
+        !is.na(universe_mapping$ENTREZID)
+      ]
+    )
+  )
+  
+  background_sizes <- vapply(
+    ontologies,
+    function(current_ontology) {
+      
+      get_go_background_size(
+        go_results[[current_ontology]]
+      )
+    },
+    integer(1)
+  )
+  
+  output <- data.frame(
+    ontology = ontologies,
+    input_universe_genes = length(universe_genes),
+    mapped_universe_entrez = mapped_entrez,
+    go_background_genes = as.integer(background_sizes),
+    stringsAsFactors = FALSE
+  )
+  
+  output$symbol_to_entrez_loss <- (
+    output$input_universe_genes -
+      output$mapped_universe_entrez
+  )
+  
+  output$entrez_to_go_loss <- (
+    output$mapped_universe_entrez -
+      output$go_background_genes
+  )
+  
+  output$total_loss <- (
+    output$input_universe_genes -
+      output$go_background_genes
+  )
+  
+  output$go_coverage_fraction <- (
+    output$go_background_genes /
+      output$input_universe_genes
+  )
+  
+  output
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: save_go_enrichment_outputs
+# ------------------------------------------------------------------------------
+
+# Save general and ontology-specific GO enrichment outputs.
+#
+# This function:
+# - saves the complete multi-ontology GO enrichment object
+# - saves functional gene sets, enrichment summaries, and coverage results
+# - saves complete and significant GO results for the community containing
+#   the selected gene
+# - exports general analysis tables
+# - exports ontology-specific BP, MF, or CC result tables
+# - preserves separate filename prefixes for the Leiden analysis and the
+#   selected-gene community analysis
+#
+# INPUT:
+# - go_enrichment:
+#     output generated by perform_leiden_go_enrichment()
+#
+# - go_results:
+#     named list containing complete ontology-specific enrichment tables
+#
+# - go_summary:
+#     named list containing ontology-specific enrichment summaries
+#
+# - go_coverage:
+#     named list containing ontology-specific GO coverage tables
+#
+# - universe_coverage:
+#     ontology-specific enrichment-universe coverage table
+#
+# - gene_go_results:
+#     output generated by extract_gene_community_go_results()
+#
+# - functional_gene_sets:
+#     output generated by prepare_leiden_functional_gene_sets()
+#
+# - output_dir:
+#     directory where RDS objects are saved
+#
+# - tables_dir:
+#     directory where TSV tables are saved
+#
+# - prefix:
+#     filename prefix used for the Leiden-community GO analysis
+#
+# - gene_prefix:
+#     filename prefix used for the selected-gene community GO analysis
+#
+# OUTPUT:
+# - invisibly returns TRUE after all outputs have been successfully saved
+#
+# ------------------------------------------------------------------------------
+
+save_go_enrichment_outputs <- function(
+    go_enrichment,
+    go_results,
+    go_summary,
+    go_coverage,
+    universe_coverage,
+    gene_go_results,
+    functional_gene_sets,
+    output_dir,
+    tables_dir,
+    prefix,
+    gene_prefix
+) {
+  
+  # Validate input
+  
+  if (!is.list(go_enrichment)) {
+    stop("go_enrichment must be a list")
+  }
+  
+  if (!is.list(go_results) || is.null(names(go_results))) {
+    stop("go_results must be a named list")
+  }
+  
+  if (!is.list(go_summary)) {
+    stop("go_summary must be a list")
+  }
+  
+  if (!is.list(go_coverage)) {
+    stop("go_coverage must be a list")
+  }
+  
+  if (!is.data.frame(universe_coverage)) {
+    stop("universe_coverage must be a data.frame")
+  }
+  
+  if (!is.list(gene_go_results)) {
+    stop("gene_go_results must be a list")
+  }
+  
+  if (!is.list(functional_gene_sets)) {
+    stop("functional_gene_sets must be a list")
+  }
+  
+  if (
+    length(prefix) != 1L ||
+    is.na(prefix) ||
+    !nzchar(prefix)
+  ) {
+    stop("prefix must be a single non-empty character string")
+  }
+  
+  if (
+    length(gene_prefix) != 1L ||
+    is.na(gene_prefix) ||
+    !nzchar(gene_prefix)
+  ) {
+    stop("gene_prefix must be a single non-empty character string")
+  }
+  
+  if (!dir.exists(output_dir)) {
+    stop(
+      "Output directory does not exist: ",
+      output_dir
+    )
+  }
+  
+  if (!dir.exists(tables_dir)) {
+    stop(
+      "Tables directory does not exist: ",
+      tables_dir
+    )
+  }
+  
+  # Combine ontology-specific coverage and summary tables
+  
+  coverage_combined <- do.call(
+    rbind,
+    go_coverage
+  )
+  
+  rownames(coverage_combined) <- NULL
+  
+  
+  summary_combined <- do.call(
+    rbind,
+    go_summary
+  )
+  
+  rownames(summary_combined) <- NULL
+  
+  # Save general R objects
+  
+  saveRDS(
+    functional_gene_sets,
+    file.path(
+      output_dir,
+      paste0(
+        prefix,
+        "_functional_gene_sets.rds"
+      )
+    )
+  )
+  
+  
+  saveRDS(
+    go_enrichment,
+    file.path(
+      output_dir,
+      paste0(
+        prefix,
+        "_go_enrichment.rds"
+      )
+    )
+  )
+  
+  
+  saveRDS(
+    go_summary,
+    file.path(
+      output_dir,
+      paste0(
+        prefix,
+        "_go_summary.rds"
+      )
+    )
+  )
+  
+  
+  saveRDS(
+    go_coverage,
+    file.path(
+      output_dir,
+      paste0(
+        prefix,
+        "_go_coverage.rds"
+      )
+    )
+  )
+  
+  
+  saveRDS(
+    gene_go_results$results,
+    file.path(
+      output_dir,
+      paste0(
+        gene_prefix,
+        "_go_results.rds"
+      )
+    )
+  )
+  
+  
+  saveRDS(
+    gene_go_results$significant_results,
+    file.path(
+      output_dir,
+      paste0(
+        gene_prefix,
+        "_go_significant.rds"
+      )
+    )
+  )
+  
+  # Save ontology-specific R objects
+  
+  for (current_ontology in names(go_results)) {
+    
+    ontology_label <- tolower(
+      current_ontology
+    )
+    
+    
+    saveRDS(
+      go_enrichment$
+        results_by_ontology[[current_ontology]],
+      file.path(
+        output_dir,
+        paste0(
+          prefix,
+          "_go_",
+          ontology_label,
+          "_enrichment.rds"
+        )
+      )
+    )
+    
+    
+    saveRDS(
+      go_summary[[current_ontology]],
+      file.path(
+        output_dir,
+        paste0(
+          prefix,
+          "_go_",
+          ontology_label,
+          "_summary.rds"
+        )
+      )
+    )
+    
+    
+    saveRDS(
+      go_coverage[[current_ontology]],
+      file.path(
+        output_dir,
+        paste0(
+          prefix,
+          "_go_",
+          ontology_label,
+          "_coverage.rds"
+        )
+      )
+    )
+  }
+  
+  # Export general tables
+
+  write.table(
+    functional_gene_sets$summary,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_functional_gene_sets_summary.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  
+  write.table(
+    go_enrichment$mapping_summary,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_go_mapping_summary.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  
+  write.table(
+    coverage_combined,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_go_coverage.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  
+  write.table(
+    universe_coverage,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_go_universe_coverage.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  
+  write.table(
+    go_enrichment$combined_results,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_go_complete_results.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  
+  write.table(
+    summary_combined,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_go_summary.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  # Export ontology-specific tables
+  
+  for (current_ontology in names(go_results)) {
+    
+    ontology_label <- tolower(
+      current_ontology
+    )
+    
+    
+    write.table(
+      go_results[[current_ontology]],
+      file = file.path(
+        tables_dir,
+        paste0(
+          prefix,
+          "_go_",
+          ontology_label,
+          "_complete_results.tsv"
+        )
+      ),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    )
+    
+    
+    write.table(
+      go_coverage[[current_ontology]],
+      file = file.path(
+        tables_dir,
+        paste0(
+          prefix,
+          "_go_",
+          ontology_label,
+          "_coverage.tsv"
+        )
+      ),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    )
+    
+    
+    write.table(
+      go_summary[[current_ontology]],
+      file = file.path(
+        tables_dir,
+        paste0(
+          prefix,
+          "_go_",
+          ontology_label,
+          "_summary.tsv"
+        )
+      ),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    )
+    
+    
+    write.table(
+      gene_go_results$
+        significant_results[[current_ontology]],
+      file = file.path(
+        tables_dir,
+        paste0(
+          gene_prefix,
+          "_go_",
+          ontology_label,
+          "_significant.tsv"
+        )
+      ),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    )
+  }
+  
+  
+  invisible(TRUE)
 }
 
 # ------------------------------------------------------------------------------
@@ -11776,8 +12837,9 @@ characterize_gene_centered_local_nodes <- function(
 #
 # INPUT:
 # - enrichment_results:
-#     complete combined GO BP enrichment table generated by
-#     perform_leiden_go_bp_enrichment(), containing at least:
+#     complete GO Biological Process enrichment table extracted from the
+#     multi-ontology results generated by perform_leiden_go_enrichment(),
+#     containing at least:
 #     - ID
 #     - Description
 #     - p.adjust
@@ -12101,6 +13163,354 @@ annotate_cancer_related_go_bp <- function(
       category_summary = category_summary
     )
   )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: extract_gene_community_cancer_related_go_bp
+# ------------------------------------------------------------------------------
+
+# Extract cancer-related GO Biological Process results for the Leiden community
+# containing a selected gene.
+#
+# This function:
+# - identifies the Leiden community containing the selected gene
+# - extracts all cancer-related GO BP annotation results assigned to that
+#   community
+# - orders terms according to cancer relevance and adjusted p-value
+# - separately retains terms classified as direct cancer-related or
+#   cancer-associated biological processes
+# - does not modify the original GO enrichment statistics or classifications
+#
+# INPUT:
+# - gene:
+#     gene symbol used to identify the corresponding Leiden community
+#
+# - node_assignment:
+#     Leiden node-assignment table containing at least:
+#     - gene
+#     - leiden_community
+#
+# - cancer_related_results:
+#     GO BP annotation table generated by annotate_cancer_related_go_bp(),
+#     containing at least:
+#     - ID
+#     - Description
+#     - GeneRatio
+#     - p.adjust
+#     - Count
+#     - community
+#     - cancer_relevance
+#     - cancer_category
+#
+# OUTPUT:
+# - list containing:
+#
+#   - gene:
+#       selected gene
+#
+#   - community:
+#       Leiden community containing the selected gene
+#
+#   - community_name:
+#       community identifier in the format used by the GO enrichment results
+#
+#   - terms:
+#       all significant GO BP terms assigned to the selected-gene community
+#
+#   - cancer_associated_terms:
+#       subset containing only direct cancer-related and broader
+#       cancer-associated biological processes
+#
+# ------------------------------------------------------------------------------
+
+extract_gene_community_cancer_related_go_bp <- function(
+    gene,
+    node_assignment,
+    cancer_related_results
+) {
+  
+  required_node_columns <- c(
+    "gene",
+    "leiden_community"
+  )
+  
+  if (!all(required_node_columns %in% colnames(node_assignment))) {
+    stop(
+      "node_assignment must contain: ",
+      paste(required_node_columns, collapse = ", ")
+    )
+  }
+  
+  required_result_columns <- c(
+    "ID",
+    "Description",
+    "GeneRatio",
+    "p.adjust",
+    "Count",
+    "community",
+    "cancer_relevance",
+    "cancer_category"
+  )
+  
+  if (!all(required_result_columns %in% colnames(cancer_related_results))) {
+    stop(
+      "cancer_related_results must contain: ",
+      paste(required_result_columns, collapse = ", ")
+    )
+  }
+  
+  gene_community <- unique(
+    node_assignment$leiden_community[
+      node_assignment$gene == gene
+    ]
+  )
+  
+  if (length(gene_community) == 0L) {
+    stop(
+      "Gene not found in Leiden node assignments: ",
+      gene
+    )
+  }
+  
+  if (
+    length(gene_community) != 1L ||
+    is.na(gene_community)
+  ) {
+    stop(
+      "The selected gene must belong to exactly one Leiden community"
+    )
+  }
+  
+  community_name <- paste0(
+    "community_",
+    gene_community
+  )
+  
+  community_terms <- cancer_related_results[
+    cancer_related_results$community == community_name,
+    ,
+    drop = FALSE
+  ]
+  
+  community_terms <- community_terms[
+    order(
+      community_terms$cancer_relevance,
+      community_terms$p.adjust
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  rownames(community_terms) <- NULL
+  
+  cancer_associated_terms <- community_terms[
+    as.character(
+      community_terms$cancer_relevance
+    ) != "not_classified",
+    ,
+    drop = FALSE
+  ]
+  
+  rownames(cancer_associated_terms) <- NULL
+  
+  return(
+    list(
+      gene = gene,
+      community = gene_community,
+      community_name = community_name,
+      terms = community_terms,
+      cancer_associated_terms = cancer_associated_terms
+    )
+  )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: save_cancer_related_go_bp_outputs
+# ------------------------------------------------------------------------------
+
+# Save cancer-related GO Biological Process annotation results.
+#
+# This function:
+# - saves the complete cancer-related GO BP annotation object
+# - exports the complete annotated significant-term table
+# - exports community-level and functional-category summaries
+# - exports the GO BP results corresponding to the community containing the
+#   selected gene
+# - preserves separate filename prefixes for the complete local analysis and
+#   the selected-gene community analysis
+#
+# INPUT:
+# - cancer_related_results:
+#     output generated by annotate_cancer_related_go_bp(), containing:
+#     - terms
+#     - summary
+#     - category_summary
+#
+# - gene_community_results:
+#     output generated by extract_gene_community_cancer_related_go_bp()
+#
+# - output_dir:
+#     directory where the RDS object is saved
+#
+# - tables_dir:
+#     directory where TSV tables are saved
+#
+# - prefix:
+#     filename prefix used for the complete local cancer-related GO BP analysis
+#
+# - gene_prefix:
+#     filename prefix used for the selected-gene community table
+#
+# OUTPUT:
+# - invisibly returns TRUE after all outputs have been successfully saved
+#
+# ------------------------------------------------------------------------------
+
+save_cancer_related_go_bp_outputs <- function(
+    cancer_related_results,
+    gene_community_results,
+    output_dir,
+    tables_dir,
+    prefix,
+    gene_prefix
+) {
+  
+  required_result_elements <- c(
+    "terms",
+    "summary",
+    "category_summary"
+  )
+  
+  if (
+    !is.list(cancer_related_results) ||
+    !all(required_result_elements %in% names(cancer_related_results))
+  ) {
+    stop(
+      "cancer_related_results must contain: ",
+      paste(required_result_elements, collapse = ", ")
+    )
+  }
+  
+  required_gene_elements <- c(
+    "gene",
+    "community",
+    "community_name",
+    "terms",
+    "cancer_associated_terms"
+  )
+  
+  if (
+    !is.list(gene_community_results) ||
+    !all(required_gene_elements %in% names(gene_community_results))
+  ) {
+    stop(
+      "gene_community_results must contain: ",
+      paste(required_gene_elements, collapse = ", ")
+    )
+  }
+  
+  if (
+    length(prefix) != 1L ||
+    is.na(prefix) ||
+    !nzchar(prefix)
+  ) {
+    stop(
+      "prefix must be a single non-empty character string"
+    )
+  }
+  
+  if (
+    length(gene_prefix) != 1L ||
+    is.na(gene_prefix) ||
+    !nzchar(gene_prefix)
+  ) {
+    stop(
+      "gene_prefix must be a single non-empty character string"
+    )
+  }
+  
+  if (!dir.exists(output_dir)) {
+    stop(
+      "Output directory does not exist: ",
+      output_dir
+    )
+  }
+  
+  if (!dir.exists(tables_dir)) {
+    stop(
+      "Tables directory does not exist: ",
+      tables_dir
+    )
+  }
+  
+  saveRDS(
+    cancer_related_results,
+    file.path(
+      output_dir,
+      paste0(
+        prefix,
+        "_cancer_related_go_bp.rds"
+      )
+    )
+  )
+  
+  write.table(
+    cancer_related_results$terms,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_cancer_related_go_bp_terms.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  write.table(
+    cancer_related_results$summary,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_cancer_related_go_bp_summary.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  write.table(
+    cancer_related_results$category_summary,
+    file = file.path(
+      tables_dir,
+      paste0(
+        prefix,
+        "_cancer_related_go_bp_category_summary.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  write.table(
+    gene_community_results$terms,
+    file = file.path(
+      tables_dir,
+      paste0(
+        gene_prefix,
+        "_cancer_related_go_bp.tsv"
+      )
+    ),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+  
+  invisible(TRUE)
 }
 
 # ------------------------------------------------------------------------------
@@ -13140,6 +14550,621 @@ visualize_gene_centered_hubs_tf_lncrna <- function(
 }
 
 # ------------------------------------------------------------------------------
+# FUNCTION: visualize_go_enrichment_by_community
+# ------------------------------------------------------------------------------
+
+# Visualize Gene Ontology enrichment results across Leiden communities.
+#
+# This function:
+# - accepts enrichment results for a single GO ontology
+# - retains statistically significant terms for visualization
+# - selects the most statistically significant terms independently within each
+#   Leiden community
+# - converts GeneRatio values to numeric ratios for plotting
+# - visualizes adjusted p-values and numbers of contributing genes
+# - represents lower adjusted p-values using darker colors
+# - applies top-N selection only for visualization
+# - does not modify the stored enrichment results
+#
+# INPUT:
+# - enrichment_results:
+#     complete enrichment table for a single GO ontology extracted from the
+#     multi-ontology results generated by perform_leiden_go_enrichment(),
+#     containing:
+#     - ID
+#     - Description
+#     - GeneRatio
+#     - p.adjust
+#     - Count
+#     - community
+#     - ontology
+#     - significant
+#
+# - ontology:
+#     GO ontology to visualize:
+#     - "BP" for Biological Process
+#     - "MF" for Molecular Function
+#     - "CC" for Cellular Component
+#
+# - top_terms_per_community:
+#     maximum number of significant GO terms displayed for each community
+#
+# OUTPUT:
+# - list containing:
+#
+#   - plot:
+#       dot plot showing the top significant GO terms across Leiden communities
+#
+#   - terms:
+#       exact GO terms used in the visualization
+#
+#   - summary:
+#       data.frame reporting numbers of available and visualized terms
+#
+# ------------------------------------------------------------------------------
+
+visualize_go_enrichment_by_community <- function(
+    enrichment_results,
+    ontology,
+    top_terms_per_community = 10
+) {
+  
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop(
+      "Package 'ggplot2' is required for GO enrichment visualization"
+    )
+  }
+  
+  valid_ontologies <- c(
+    "BP",
+    "MF",
+    "CC"
+  )
+  
+  if (
+    length(ontology) != 1L ||
+    is.na(ontology) ||
+    !ontology %in% valid_ontologies
+  ) {
+    stop(
+      "ontology must be one of: ",
+      paste(valid_ontologies, collapse = ", ")
+    )
+  }
+  
+  required_columns <- c(
+    "ID",
+    "Description",
+    "GeneRatio",
+    "p.adjust",
+    "Count",
+    "community",
+    "ontology",
+    "significant"
+  )
+  
+  if (!all(required_columns %in% colnames(enrichment_results))) {
+    stop(
+      "enrichment_results must contain: ",
+      paste(required_columns, collapse = ", ")
+    )
+  }
+  
+  if (
+    length(top_terms_per_community) != 1L ||
+    is.na(top_terms_per_community) ||
+    top_terms_per_community < 1
+  ) {
+    stop(
+      "top_terms_per_community must be a positive integer"
+    )
+  }
+  
+  ontology_results <- enrichment_results[
+    enrichment_results$ontology == ontology,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(ontology_results) == 0L) {
+    stop(
+      "No enrichment results are available for ontology ",
+      ontology
+    )
+  }
+  
+  significant_results <- ontology_results[
+    ontology_results$significant %in% TRUE,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(significant_results) == 0L) {
+    stop(
+      "No significant enrichment results are available for ontology ",
+      ontology
+    )
+  }
+  
+  parse_gene_ratio <- function(x) {
+    
+    ratio_parts <- strsplit(
+      as.character(x),
+      "/",
+      fixed = TRUE
+    )
+    
+    vapply(
+      ratio_parts,
+      function(parts) {
+        
+        if (length(parts) != 2L) {
+          return(NA_real_)
+        }
+        
+        numerator <- as.numeric(parts[1])
+        denominator <- as.numeric(parts[2])
+        
+        if (
+          is.na(numerator) ||
+          is.na(denominator) ||
+          denominator == 0
+        ) {
+          return(NA_real_)
+        }
+        
+        numerator / denominator
+      },
+      numeric(1)
+    )
+  }
+  
+  significant_results$gene_ratio_numeric <- parse_gene_ratio(
+    significant_results$GeneRatio
+  )
+  
+  communities <- sort(
+    unique(significant_results$community)
+  )
+  
+  community_term_list <- lapply(
+    communities,
+    function(current_community) {
+      
+      current_terms <- significant_results[
+        significant_results$community == current_community,
+        ,
+        drop = FALSE
+      ]
+      
+      current_terms <- current_terms[
+        order(
+          current_terms$p.adjust,
+          -current_terms$Count
+        ),
+        ,
+        drop = FALSE
+      ]
+      
+      head(
+        current_terms,
+        top_terms_per_community
+      )
+    }
+  )
+  
+  community_terms <- do.call(
+    rbind,
+    community_term_list
+  )
+  
+  rownames(community_terms) <- NULL
+  
+  community_terms$community <- factor(
+    community_terms$community,
+    levels = communities
+  )
+  
+  community_terms$term_label <- paste0(
+    community_terms$Description,
+    " [",
+    community_terms$ID,
+    "]"
+  )
+  
+  community_terms$term_label <- factor(
+    community_terms$term_label,
+    levels = rev(
+      unique(
+        community_terms$term_label
+      )
+    )
+  )
+  
+  ontology_name <- switch(
+    ontology,
+    BP = "Biological Process",
+    MF = "Molecular Function",
+    CC = "Cellular Component"
+  )
+  
+  enrichment_plot <- ggplot2::ggplot(
+    community_terms,
+    ggplot2::aes(
+      x = gene_ratio_numeric,
+      y = term_label,
+      size = Count,
+      color = p.adjust
+    )
+  ) +
+    ggplot2::geom_point(
+      alpha = 0.9
+    ) +
+    ggplot2::scale_color_gradient(
+      low = "black",
+      high = "lightcyan"
+    ) +
+    ggplot2::facet_wrap(
+      ~ community,
+      scales = "free_y",
+      ncol = 2
+    ) +
+    ggplot2::labs(
+      title = paste0(
+        "CASC19 Local Community GO ",
+        ontology_name,
+        " Enrichment"
+      ),
+      subtitle = paste0(
+        "Top ",
+        top_terms_per_community,
+        " significant terms per community"
+      ),
+      x = "Gene ratio",
+      y = NULL,
+      size = "Gene count",
+      color = "Adjusted p-value"
+    ) +
+    ggplot2::theme_bw() +
+    ggplot2::theme(
+      plot.title.position = "plot",
+      plot.title = ggplot2::element_text(
+        face = "bold",
+        hjust = 0.5
+      ),
+      plot.subtitle = ggplot2::element_text(
+        hjust = 0.5
+      ),
+      strip.text = ggplot2::element_text(
+        face = "bold"
+      ),
+      axis.text.y = ggplot2::element_text(
+        size = 7
+      )
+    )
+  
+  summary <- data.frame(
+    metric = c(
+      "ontology",
+      "significant_terms",
+      "communities_with_significant_terms",
+      "terms_visualized"
+    ),
+    value = c(
+      ontology,
+      nrow(significant_results),
+      length(communities),
+      nrow(community_terms)
+    ),
+    stringsAsFactors = FALSE
+  )
+  
+  return(
+    list(
+      plot = enrichment_plot,
+      terms = community_terms,
+      summary = summary
+    )
+  )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: visualize_go_enrichment_selected_community
+# ------------------------------------------------------------------------------
+
+# Visualize Gene Ontology enrichment results within a selected Leiden community.
+#
+# This function:
+# - accepts enrichment results for a single GO ontology
+# - selects the Leiden community of interest
+# - retains statistically significant terms for visualization
+# - selects the most statistically significant terms within the community
+# - converts GeneRatio values to numeric ratios for plotting
+# - visualizes adjusted p-values and numbers of contributing genes
+# - represents lower adjusted p-values using darker colors
+# - applies top-N selection only for visualization
+# - does not modify the stored enrichment results
+#
+# INPUT:
+# - enrichment_results:
+#     complete enrichment table for a single GO ontology extracted from the
+#     multi-ontology results generated by perform_leiden_go_enrichment(),
+#     containing:
+#     - ID
+#     - Description
+#     - GeneRatio
+#     - p.adjust
+#     - Count
+#     - community
+#     - ontology
+#     - significant
+#
+# - selected_community:
+#     Leiden community to visualize
+#
+# - ontology:
+#     GO ontology to visualize:
+#     - "BP" for Biological Process
+#     - "MF" for Molecular Function
+#     - "CC" for Cellular Component
+#
+# - top_terms:
+#     maximum number of significant GO terms displayed
+#
+# OUTPUT:
+# - list containing:
+#
+#   - plot:
+#       dot plot showing the top significant GO terms in the selected community
+#
+#   - terms:
+#       exact GO terms used in the visualization
+#
+#   - summary:
+#       data.frame reporting numbers of available and visualized terms
+#
+# ------------------------------------------------------------------------------
+
+visualize_go_enrichment_selected_community <- function(
+    enrichment_results,
+    selected_community,
+    ontology,
+    top_terms = 10
+) {
+  
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop(
+      "Package 'ggplot2' is required for GO enrichment visualization"
+    )
+  }
+  
+  valid_ontologies <- c(
+    "BP",
+    "MF",
+    "CC"
+  )
+  
+  if (
+    length(ontology) != 1L ||
+    is.na(ontology) ||
+    !ontology %in% valid_ontologies
+  ) {
+    stop(
+      "ontology must be one of: ",
+      paste(valid_ontologies, collapse = ", ")
+    )
+  }
+  
+  required_columns <- c(
+    "ID",
+    "Description",
+    "GeneRatio",
+    "p.adjust",
+    "Count",
+    "community",
+    "ontology",
+    "significant"
+  )
+  
+  if (!all(required_columns %in% colnames(enrichment_results))) {
+    stop(
+      "enrichment_results must contain: ",
+      paste(required_columns, collapse = ", ")
+    )
+  }
+  
+  if (
+    length(selected_community) != 1L ||
+    is.na(selected_community)
+  ) {
+    stop(
+      "selected_community must contain exactly one Leiden community"
+    )
+  }
+  
+  if (
+    length(top_terms) != 1L ||
+    is.na(top_terms) ||
+    top_terms < 1
+  ) {
+    stop(
+      "top_terms must be a positive integer"
+    )
+  }
+  
+  selected_community_name <- paste0(
+    "community_",
+    selected_community
+  )
+  
+  community_results <- enrichment_results[
+    enrichment_results$ontology == ontology &
+      enrichment_results$community == selected_community_name,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(community_results) == 0L) {
+    stop(
+      "No enrichment results are available for ",
+      ontology,
+      " in ",
+      selected_community_name
+    )
+  }
+  
+  significant_results <- community_results[
+    community_results$significant %in% TRUE,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(significant_results) == 0L) {
+    stop(
+      "No significant ",
+      ontology,
+      " enrichment results are available for ",
+      selected_community_name
+    )
+  }
+  
+  ratio_parts <- strsplit(
+    as.character(significant_results$GeneRatio),
+    "/",
+    fixed = TRUE
+  )
+  
+  significant_results$gene_ratio_numeric <- vapply(
+    ratio_parts,
+    function(parts) {
+      
+      if (length(parts) != 2L) {
+        return(NA_real_)
+      }
+      
+      numerator <- as.numeric(parts[1])
+      denominator <- as.numeric(parts[2])
+      
+      if (
+        is.na(numerator) ||
+        is.na(denominator) ||
+        denominator == 0
+      ) {
+        return(NA_real_)
+      }
+      
+      numerator / denominator
+    },
+    numeric(1)
+  )
+  
+  significant_results <- significant_results[
+    order(
+      significant_results$p.adjust,
+      -significant_results$Count
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  community_terms <- head(
+    significant_results,
+    top_terms
+  )
+  
+  community_terms$term_label <- paste0(
+    community_terms$Description,
+    " [",
+    community_terms$ID,
+    "]"
+  )
+  
+  community_terms$term_label <- factor(
+    community_terms$term_label,
+    levels = rev(
+      community_terms$term_label
+    )
+  )
+  
+  ontology_name <- switch(
+    ontology,
+    BP = "Biological Process",
+    MF = "Molecular Function",
+    CC = "Cellular Component"
+  )
+  
+  enrichment_plot <- ggplot2::ggplot(
+    community_terms,
+    ggplot2::aes(
+      x = gene_ratio_numeric,
+      y = term_label,
+      size = Count,
+      color = p.adjust
+    )
+  ) +
+    ggplot2::geom_point(
+      alpha = 0.9
+    ) +
+    ggplot2::scale_color_gradient(
+      low = "black",
+      high = "lightcyan"
+    ) +
+    ggplot2::labs(
+      title = paste0(
+        "GO ",
+        ontology_name,
+        " Enrichment in the CASC19 Community"
+      ),
+      subtitle = paste0(
+        "Leiden community ",
+        selected_community
+      ),
+      x = "Gene ratio",
+      y = NULL,
+      size = "Gene count",
+      color = "Adjusted p-value"
+    ) +
+    ggplot2::theme_bw() +
+    ggplot2::theme(
+      plot.title.position = "plot",
+      plot.title = ggplot2::element_text(
+        face = "bold",
+        hjust = 0.5
+      ),
+      plot.subtitle = ggplot2::element_text(
+        hjust = 0.5
+      ),
+      axis.text.y = ggplot2::element_text(
+        size = 8
+      )
+    )
+  
+  summary <- data.frame(
+    metric = c(
+      "ontology",
+      "selected_community",
+      "significant_terms",
+      "terms_visualized"
+    ),
+    value = c(
+      ontology,
+      selected_community,
+      nrow(significant_results),
+      nrow(community_terms)
+    ),
+    stringsAsFactors = FALSE
+  )
+  
+  return(
+    list(
+      plot = enrichment_plot,
+      terms = community_terms,
+      summary = summary
+    )
+  )
+}
+
+# ------------------------------------------------------------------------------
 # FUNCTION: visualize_gene_centered_functional_enrichment
 # ------------------------------------------------------------------------------
 
@@ -13147,12 +15172,14 @@ visualize_gene_centered_hubs_tf_lncrna <- function(
 # results within a local gene-centered regulatory network.
 #
 # This function:
-# - uses the complete GO BP enrichment results generated in STEP 17E
+# - uses the GO Biological Process enrichment results generated in STEP 17E
+#   and extracted from the multi-ontology enrichment analysis
 # - retains statistically significant terms for visualization
 # - selects the most statistically significant terms independently within each
 #   Leiden community
 # - converts GeneRatio values to numeric ratios for plotting
 # - visualizes adjusted p-values and numbers of contributing genes
+# - represents lower adjusted p-values using darker colors
 # - separately visualizes cancer-associated GO BP terms from the community
 #   containing the selected gene
 # - applies top-N selection only for visualization
@@ -13160,8 +15187,9 @@ visualize_gene_centered_hubs_tf_lncrna <- function(
 #
 # INPUT:
 # - enrichment_results:
-#     complete GO BP enrichment table generated by
-#     perform_leiden_go_bp_enrichment(), containing:
+#     complete GO Biological Process enrichment table extracted from the
+#     multi-ontology results generated by perform_leiden_go_enrichment(),
+#     containing:
 #     - ID
 #     - Description
 #     - GeneRatio
@@ -13402,13 +15430,17 @@ visualize_gene_centered_functional_enrichment <- function(
     ggplot2::geom_point(
       alpha = 0.9
     ) +
+    ggplot2::scale_color_gradient(
+      low = "black",
+      high = "lightcyan"
+    ) +
     ggplot2::facet_wrap(
       ~ community,
       scales = "free_y",
       ncol = 2
     ) +
     ggplot2::labs(
-      title = "CASC19 Local Community GO Biological Process Enrichment",
+      title = "GO Biological Process Enrichment Across CASC19 Local Communities",
       subtitle = paste0(
         "Top ",
         top_terms_per_community,
@@ -13499,8 +15531,12 @@ visualize_gene_centered_functional_enrichment <- function(
     ggplot2::geom_point(
       alpha = 0.9
     ) +
+    ggplot2::scale_color_gradient(
+      low = "black",
+      high = "lightcyan"
+    ) +
     ggplot2::labs(
-      title = "Cancer-Associated Functional Processes in the CASC19 Community",
+      title = "Cancer-Associated GO Biological Processes in the CASC19 Community",
       subtitle = paste0(
         "Leiden community ",
         selected_community
@@ -13555,6 +15591,714 @@ visualize_gene_centered_functional_enrichment <- function(
       community_terms = community_terms,
       cancer_terms = cancer_terms,
       summary = summary
+    )
+  )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: characterize_selected_community_regulatory_relationships
+# ------------------------------------------------------------------------------
+
+# Characterize directed regulatory relationships between the Leiden community
+# containing a selected gene and all other communities in a local regulatory
+# network.
+#
+# This function:
+# - identifies the Leiden community containing the selected gene
+# - maps regulator and target genes to their Leiden communities
+# - retains only inter-community edges involving the selected-gene community
+# - preserves the original direction of regulatory interactions
+# - classifies relationships as outgoing or incoming relative to the
+#   selected-gene community
+# - summarizes interactions by connected community and regulatory edge class
+# - preserves original GRN edge attributes
+# - does not apply additional edge filtering or network inference
+#
+# INPUT:
+# - local_subgraph:
+#     local gene-centered regulatory subgraph generated by
+#     prepare_gene_centered_local_subgraph(), containing:
+#     - graph
+#     - nodes
+#     - edges
+#     - summary
+#
+# - node_assignment:
+#     Leiden node-assignment table containing:
+#     - gene
+#     - leiden_community
+#
+# - selected_gene:
+#     gene whose Leiden community is used as the focal community
+#
+# OUTPUT:
+# - list containing:
+#
+#   - selected_gene:
+#       selected gene
+#
+#   - selected_community:
+#       Leiden community containing the selected gene
+#
+#   - edges:
+#       complete inter-community edge table involving the selected community
+#
+#   - community_summary:
+#       summary of incoming and outgoing regulatory relationships for every
+#       connected community
+#
+#   - edge_type_summary:
+#       summary stratified by regulatory interaction class
+#
+#   - sign_summary:
+#       summary stratified by Spearman correlation sign
+#
+#   - summary:
+#       general analysis summary
+#
+# ------------------------------------------------------------------------------
+
+characterize_selected_community_regulatory_relationships <- function(
+    local_subgraph,
+    node_assignment,
+    selected_gene
+) {
+  
+  if (!is.list(local_subgraph) || !"edges" %in% names(local_subgraph)) {
+    stop(
+      "local_subgraph must contain an 'edges' table"
+    )
+  }
+  
+  required_node_columns <- c(
+    "gene",
+    "leiden_community"
+  )
+  
+  if (!all(required_node_columns %in% colnames(node_assignment))) {
+    stop(
+      "node_assignment must contain: ",
+      paste(required_node_columns, collapse = ", ")
+    )
+  }
+  
+  edges <- local_subgraph$edges
+  
+  required_edge_columns <- c(
+    "regulator",
+    "target"
+  )
+  
+  if (!all(required_edge_columns %in% colnames(edges))) {
+    stop(
+      "local_subgraph$edges must contain: ",
+      paste(required_edge_columns, collapse = ", ")
+    )
+  }
+  
+  if (anyDuplicated(node_assignment$gene) > 0L) {
+    stop(
+      "node_assignment contains duplicated gene identifiers"
+    )
+  }
+  
+  selected_gene_rows <- node_assignment[
+    node_assignment$gene == selected_gene,
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(selected_gene_rows) != 1L) {
+    stop(
+      "selected_gene must occur exactly once in node_assignment"
+    )
+  }
+  
+  selected_community <- selected_gene_rows$leiden_community[1]
+  
+  regulator_index <- match(
+    edges$regulator,
+    node_assignment$gene
+  )
+  
+  target_index <- match(
+    edges$target,
+    node_assignment$gene
+  )
+  
+  if (anyNA(regulator_index) || anyNA(target_index)) {
+    stop(
+      "Some local GRN edge genes are missing from the Leiden node assignment"
+    )
+  }
+  
+  edges$regulator_community <- node_assignment$leiden_community[
+    regulator_index
+  ]
+  
+  edges$target_community <- node_assignment$leiden_community[
+    target_index
+  ]
+  
+  inter_edges <- edges[
+    edges$regulator_community != edges$target_community &
+      (
+        edges$regulator_community == selected_community |
+          edges$target_community == selected_community
+      ),
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(inter_edges) == 0L) {
+    stop(
+      "No inter-community regulatory relationships involve the selected community"
+    )
+  }
+  
+  inter_edges$direction <- ifelse(
+    inter_edges$regulator_community == selected_community,
+    "outgoing",
+    "incoming"
+  )
+  
+  inter_edges$connected_community <- ifelse(
+    inter_edges$direction == "outgoing",
+    inter_edges$target_community,
+    inter_edges$regulator_community
+  )
+  
+  inter_edges$selected_community <- selected_community
+  
+  if ("spearman_rho" %in% colnames(inter_edges)) {
+    
+    inter_edges$correlation_sign <- ifelse(
+      inter_edges$spearman_rho > 0,
+      "positive",
+      ifelse(
+        inter_edges$spearman_rho < 0,
+        "negative",
+        "zero"
+      )
+    )
+    
+  } else {
+    
+    inter_edges$correlation_sign <- NA_character_
+  }
+  
+  connected_communities <- sort(
+    unique(
+      inter_edges$connected_community
+    )
+  )
+  
+  directions <- c(
+    "outgoing",
+    "incoming"
+  )
+  
+  community_summary_list <- list()
+  
+  summary_index <- 1L
+  
+  for (current_community in connected_communities) {
+    
+    for (current_direction in directions) {
+      
+      current_edges <- inter_edges[
+        inter_edges$connected_community == current_community &
+          inter_edges$direction == current_direction,
+        ,
+        drop = FALSE
+      ]
+      
+      if (nrow(current_edges) == 0L) {
+        next
+      }
+      
+      mean_score <- if (
+        "combined_score" %in% colnames(current_edges)
+      ) {
+        mean(
+          current_edges$combined_score,
+          na.rm = TRUE
+        )
+      } else {
+        NA_real_
+      }
+      
+      median_score <- if (
+        "combined_score" %in% colnames(current_edges)
+      ) {
+        stats::median(
+          current_edges$combined_score,
+          na.rm = TRUE
+        )
+      } else {
+        NA_real_
+      }
+      
+      mean_abs_rho <- if (
+        "spearman_rho" %in% colnames(current_edges)
+      ) {
+        mean(
+          abs(current_edges$spearman_rho),
+          na.rm = TRUE
+        )
+      } else {
+        NA_real_
+      }
+      
+      lnctard_supported_edges <- if (
+        "lnctard_supported" %in% colnames(current_edges)
+      ) {
+        sum(
+          current_edges$lnctard_supported %in% TRUE,
+          na.rm = TRUE
+        )
+      } else {
+        NA_integer_
+      }
+      
+      community_summary_list[[summary_index]] <- data.frame(
+        selected_community = selected_community,
+        connected_community = current_community,
+        direction = current_direction,
+        n_edges = nrow(current_edges),
+        mean_combined_score = mean_score,
+        median_combined_score = median_score,
+        mean_absolute_spearman_rho = mean_abs_rho,
+        lnctard_supported_edges = lnctard_supported_edges,
+        stringsAsFactors = FALSE
+      )
+      
+      summary_index <- summary_index + 1L
+    }
+  }
+  
+  community_summary <- do.call(
+    rbind,
+    community_summary_list
+  )
+  
+  rownames(community_summary) <- NULL
+  
+  if ("edge_type" %in% colnames(inter_edges)) {
+    
+    edge_type_summary <- as.data.frame(
+      table(
+        connected_community = inter_edges$connected_community,
+        direction = inter_edges$direction,
+        edge_type = inter_edges$edge_type
+      ),
+      stringsAsFactors = FALSE
+    )
+    
+    edge_type_summary <- edge_type_summary[
+      edge_type_summary$Freq > 0,
+      ,
+      drop = FALSE
+    ]
+    
+    colnames(edge_type_summary)[
+      colnames(edge_type_summary) == "Freq"
+    ] <- "n_edges"
+    
+  } else {
+    
+    edge_type_summary <- data.frame()
+  }
+  
+  if ("spearman_rho" %in% colnames(inter_edges)) {
+    
+    sign_summary <- as.data.frame(
+      table(
+        connected_community = inter_edges$connected_community,
+        direction = inter_edges$direction,
+        correlation_sign = inter_edges$correlation_sign
+      ),
+      stringsAsFactors = FALSE
+    )
+    
+    sign_summary <- sign_summary[
+      sign_summary$Freq > 0,
+      ,
+      drop = FALSE
+    ]
+    
+    colnames(sign_summary)[
+      colnames(sign_summary) == "Freq"
+    ] <- "n_edges"
+    
+  } else {
+    
+    sign_summary <- data.frame()
+  }
+  
+  analysis_summary <- data.frame(
+    metric = c(
+      "selected_gene",
+      "selected_community",
+      "connected_communities",
+      "intercommunity_edges",
+      "outgoing_edges",
+      "incoming_edges"
+    ),
+    value = c(
+      selected_gene,
+      selected_community,
+      length(connected_communities),
+      nrow(inter_edges),
+      sum(inter_edges$direction == "outgoing"),
+      sum(inter_edges$direction == "incoming")
+    ),
+    stringsAsFactors = FALSE
+  )
+  
+  return(
+    list(
+      selected_gene = selected_gene,
+      selected_community = selected_community,
+      edges = inter_edges,
+      community_summary = community_summary,
+      edge_type_summary = edge_type_summary,
+      sign_summary = sign_summary,
+      summary = analysis_summary
+    )
+  )
+}
+
+# ------------------------------------------------------------------------------
+# FUNCTION: visualize_selected_community_regulatory_relationships
+# ------------------------------------------------------------------------------
+
+# Visualize directed regulatory relationships between the Leiden community
+# containing a selected gene and the other communities in a local regulatory
+# network.
+#
+# This function generates:
+#
+# - a directed community-level network summarizing regulatory connections
+#   involving the selected-gene community
+#
+# - a regulatory-class bar plot showing the numbers of incoming and outgoing
+#   interactions for each connected community and interaction class
+#
+# No additional GRN filtering is performed.
+#
+# INPUT:
+# - relationship_results:
+#     output generated by
+#     characterize_selected_community_regulatory_relationships()
+#
+# OUTPUT:
+# - list containing:
+#     - community_network_plot
+#     - edge_type_plot
+#     - community_network_nodes
+#     - community_network_edges
+#
+# ------------------------------------------------------------------------------
+
+visualize_selected_community_regulatory_relationships <- function(
+    relationship_results
+) {
+  
+  if (!requireNamespace("igraph", quietly = TRUE)) {
+    stop(
+      "Package 'igraph' is required for inter-community visualization"
+    )
+  }
+  
+  if (!requireNamespace("ggraph", quietly = TRUE)) {
+    stop(
+      "Package 'ggraph' is required for inter-community visualization"
+    )
+  }
+  
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop(
+      "Package 'ggplot2' is required for inter-community visualization"
+    )
+  }
+  
+  required_objects <- c(
+    "selected_gene",
+    "selected_community",
+    "edges",
+    "community_summary",
+    "edge_type_summary"
+  )
+  
+  if (!all(required_objects %in% names(relationship_results))) {
+    stop(
+      "relationship_results must contain: ",
+      paste(required_objects, collapse = ", ")
+    )
+  }
+  
+  selected_gene <- relationship_results$selected_gene
+  selected_community <- relationship_results$selected_community
+  inter_edges <- relationship_results$edges
+  
+  pair_summary <- stats::aggregate(
+    rep(1L, nrow(inter_edges)),
+    by = list(
+      regulator_community = inter_edges$regulator_community,
+      target_community = inter_edges$target_community
+    ),
+    FUN = sum
+  )
+  
+  colnames(pair_summary)[
+    colnames(pair_summary) == "x"
+  ] <- "n_edges"
+  
+  pair_summary$from <- paste0(
+    "community_",
+    pair_summary$regulator_community
+  )
+  
+  pair_summary$to <- paste0(
+    "community_",
+    pair_summary$target_community
+  )
+  
+  community_ids <- sort(
+    unique(
+      c(
+        inter_edges$regulator_community,
+        inter_edges$target_community
+      )
+    )
+  )
+  
+  community_nodes <- data.frame(
+    name = paste0(
+      "community_",
+      community_ids
+    ),
+    community = community_ids,
+    is_selected_community = community_ids == selected_community,
+    stringsAsFactors = FALSE
+  )
+  
+  community_nodes$node_label <- ifelse(
+    community_nodes$is_selected_community,
+    paste0(
+      "Community ",
+      community_nodes$community,
+      "\n",
+      selected_gene
+    ),
+    paste0(
+      "Community ",
+      community_nodes$community
+    )
+  )
+  
+  community_graph <- igraph::graph_from_data_frame(
+    d = pair_summary[
+      ,
+      c(
+        "from",
+        "to",
+        "n_edges"
+      )
+    ],
+    directed = TRUE,
+    vertices = community_nodes
+  )
+  
+  selected_node_name <- paste0(
+    "community_",
+    selected_community
+  )
+  
+  selected_node_index <- match(
+    selected_node_name,
+    igraph::V(community_graph)$name
+  )
+  
+  if (is.na(selected_node_index)) {
+    stop(
+      "Selected community was not found in the community-level graph"
+    )
+  }
+  
+  community_layout <- igraph::layout_as_star(
+    community_graph,
+    center = selected_node_index
+  )
+  
+  community_network_plot <- ggraph::ggraph(
+    community_graph,
+    layout = "manual",
+    x = community_layout[, 1],
+    y = community_layout[, 2]
+  ) +
+    ggraph::geom_edge_fan(
+      ggplot2::aes(
+        width = n_edges,
+        alpha = n_edges
+      ),
+      arrow = grid::arrow(
+        length = grid::unit(
+          3,
+          "mm"
+        ),
+        type = "closed"
+      ),
+      start_cap = ggraph::circle(
+        7,
+        "mm"
+      ),
+      end_cap = ggraph::circle(
+        7,
+        "mm"
+      ),
+      show.legend = TRUE
+    ) +
+    ggraph::scale_edge_width(
+      range = c(
+        0.6,
+        4
+      ),
+      name = "Regulatory edges"
+    ) +
+    ggraph::scale_edge_alpha(
+      range = c(
+        0.35,
+        0.85
+      ),
+      guide = "none"
+    ) +
+    ggraph::geom_node_point(
+      ggplot2::aes(
+        size = is_selected_community,
+        shape = is_selected_community
+      ),
+      fill = "white",
+      color = "black",
+      stroke = 1.2
+    ) +
+    ggraph::geom_node_text(
+      ggplot2::aes(
+        label = node_label
+      ),
+      fontface = "bold",
+      vjust = -1.5,
+      size = 4
+    ) +
+    ggplot2::scale_size_manual(
+      values = c(
+        `FALSE` = 7,
+        `TRUE` = 12
+      ),
+      guide = "none"
+    ) +
+    ggplot2::scale_shape_manual(
+      values = c(
+        `FALSE` = 21,
+        `TRUE` = 22
+      ),
+      guide = "none"
+    ) +
+    ggplot2::labs(
+      title = paste0(
+        selected_gene,
+        " Community Regulatory Relationships"
+      ),
+      subtitle = paste0(
+        "Directed inter-community relationships involving Leiden community ",
+        selected_community
+      )
+    ) +
+    ggplot2::theme_void() +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(
+        face = "bold",
+        hjust = 0.5
+      ),
+      plot.subtitle = ggplot2::element_text(
+        hjust = 0.5
+      ),
+      legend.position = "right"
+    )
+  
+  edge_type_summary <- relationship_results$edge_type_summary
+  
+  if (nrow(edge_type_summary) > 0L) {
+    
+    edge_type_summary$connected_community_label <- paste0(
+      "Community ",
+      edge_type_summary$connected_community
+    )
+    
+    edge_type_summary$direction <- factor(
+      edge_type_summary$direction,
+      levels = c(
+        "outgoing",
+        "incoming"
+      )
+    )
+    
+    edge_type_plot <- ggplot2::ggplot(
+      edge_type_summary,
+      ggplot2::aes(
+        x = connected_community_label,
+        y = n_edges,
+        fill = direction
+      )
+    ) +
+      ggplot2::geom_col(
+        position = "dodge"
+      ) +
+      ggplot2::facet_wrap(
+        ~ edge_type,
+        scales = "free_y"
+      ) +
+      ggplot2::labs(
+        title = paste0(
+          selected_gene,
+          " Community Regulatory Interaction Classes"
+        ),
+        subtitle = paste0(
+          "Incoming and outgoing relationships involving Leiden community ",
+          selected_community
+        ),
+        x = "Connected Leiden community",
+        y = "Number of regulatory edges",
+        fill = "Direction"
+      ) +
+      ggplot2::theme_bw() +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(
+          face = "bold",
+          hjust = 0.5
+        ),
+        plot.subtitle = ggplot2::element_text(
+          hjust = 0.5
+        ),
+        axis.text.x = ggplot2::element_text(
+          angle = 45,
+          hjust = 1
+        ),
+        legend.position = "right"
+      )
+    
+  } else {
+    
+    edge_type_plot <- NULL
+  }
+  
+  return(
+    list(
+      community_network_plot = community_network_plot,
+      edge_type_plot = edge_type_plot,
+      community_network_nodes = community_nodes,
+      community_network_edges = pair_summary
     )
   )
 }
