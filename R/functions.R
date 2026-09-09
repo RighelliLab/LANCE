@@ -1,3 +1,33 @@
+# ------------------------------------------------------------------------------
+# FUNCTION: load_txt_counts_to_seurat
+# ------------------------------------------------------------------------------
+# Load a raw UMI count matrix and the corresponding cell annotation file and
+# convert them into a Seurat object.
+#
+# The function:
+# - checks the uniqueness and correspondence of gene and cell identifiers
+# - converts the count matrix into a sparse matrix
+# - creates a Seurat object
+# - adds the provided cell annotations
+# - calculates the percentage of mitochondrial counts for each cell
+# - filters cells according to the mitochondrial percentage threshold
+# - reports the number of cells before and after quality-control filtering
+#
+# INPUT:
+# - counts_file: path to the raw UMI count matrix file
+# - meta_file: path to the cell annotation file
+# - save_path: optional path for saving the Seurat object
+#
+# OPTIONAL PARAMETERS:
+# - mt_pattern: pattern for identifying mitochondrial genes (default: "^MT-")
+# - mt_threshold: mitochondrial percentage threshold for cell filtering (default: 5)
+# - min_cells: minimum number of cells required for a feature (default: 1)
+# - min_features: minimum number of features required for a cell (default: 1)
+#
+# OUTPUT:
+# - filtered Seurat object containing raw UMI counts and cell annotations
+# ------------------------------------------------------------------------------
+
 load_txt_counts_to_seurat <- function(
     counts_file,
     meta_file,
@@ -7,30 +37,30 @@ load_txt_counts_to_seurat <- function(
     min_features = 1,
     save_path = NULL
 ) {
-
+  
   if (!file.exists(counts_file)) {
     stop("Counts file not found: ", counts_file)
   }
-
+  
   if (!file.exists(meta_file)) {
     stop("Metadata file not found: ", meta_file)
   }
-
+  
   counts_connection <- if (grepl("\\.gz$", counts_file)) {
     gzfile(counts_file, open = "rt")
   } else {
     file(counts_file, open = "rt")
   }
-
+  
   meta_connection <- if (grepl("\\.gz$", meta_file)) {
     gzfile(meta_file, open = "rt")
   } else {
     file(meta_file, open = "rt")
   }
-
+  
   on.exit(close(counts_connection), add = TRUE)
   on.exit(close(meta_connection), add = TRUE)
-
+  
   counts <- read.table(
     counts_connection,
     header = TRUE,
@@ -39,7 +69,7 @@ load_txt_counts_to_seurat <- function(
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
-
+  
   meta <- read.table(
     meta_connection,
     header = TRUE,
@@ -48,20 +78,20 @@ load_txt_counts_to_seurat <- function(
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
-
+  
   # I file sono già organizzati come geni × cellule.
   if (anyDuplicated(rownames(counts))) {
     stop("Gene names in the counts matrix are not unique")
   }
-
+  
   if (anyDuplicated(colnames(counts))) {
     stop("Cell barcodes in the counts matrix are not unique")
   }
-
+  
   if (anyDuplicated(rownames(meta))) {
     stop("Cell barcodes in the metadata are not unique")
   }
-
+  
   # Uniforma i barcode seguendo il comportamento del codice originale.
   colnames(counts) <- gsub(
     "-",
@@ -69,26 +99,26 @@ load_txt_counts_to_seurat <- function(
     colnames(counts),
     fixed = TRUE
   )
-
+  
   rownames(meta) <- gsub(
     "-",
     ".",
     rownames(meta),
     fixed = TRUE
   )
-
+  
   if (!setequal(colnames(counts), rownames(meta))) {
-
+    
     missing_in_meta <- setdiff(
       colnames(counts),
       rownames(meta)
     )
-
+    
     missing_in_counts <- setdiff(
       rownames(meta),
       colnames(counts)
     )
-
+    
     stop(
       "Counts and metadata barcodes do not match. ",
       "Missing in metadata: ",
@@ -97,44 +127,70 @@ load_txt_counts_to_seurat <- function(
       length(missing_in_counts)
     )
   }
-
+  
   # Riordina le annotazioni come le colonne della matrice.
   meta <- meta[colnames(counts), , drop = FALSE]
-
+  
   dge <- Matrix::Matrix(
     as.matrix(counts),
     sparse = TRUE
   )
-
+  
+  n_cells_before_qc <- ncol(dge)
+  
   obj <- Seurat::CreateSeuratObject(
     counts = dge,
     min.cells = min_cells,
     min.features = min_features
   )
-
+  
+  n_cells_after_seurat_filter <- ncol(obj)
+  
   # CreateSeuratObject può eliminare geni/cellule in base alle soglie:
   # riallineiamo quindi i metadata alle cellule effettivamente conservate.
   meta <- meta[colnames(obj), , drop = FALSE]
-
+  
   obj <- Seurat::AddMetaData(
     object = obj,
     metadata = meta
   )
-
+  
   obj[["percent.mt"]] <- Seurat::PercentageFeatureSet(
     obj,
     pattern = mt_pattern
   )
-
+  
+  n_cells_removed_mt <- sum(
+    obj$percent.mt >= mt_threshold
+  )
+  
   obj <- subset(
     obj,
     subset = percent.mt < mt_threshold
   )
-
+  
+  n_cells_after_qc <- ncol(obj)
+  
+  cat("\nQC summary:\n")
+  cat("Cells before QC:", n_cells_before_qc, "\n")
+  cat(
+    "Cells removed by Seurat filtering:",
+    n_cells_before_qc - n_cells_after_seurat_filter,
+    "\n"
+  )
+  cat(
+    "Cells removed by mitochondrial filtering (percent.mt >=",
+    mt_threshold,
+    "%):",
+    n_cells_removed_mt,
+    "\n"
+  )
+  cat("Cells after QC:", n_cells_after_qc, "\n\n")
+  
   if (!is.null(save_path)) {
     saveRDS(obj, save_path)
   }
-
+  
   return(obj)
 }
 
