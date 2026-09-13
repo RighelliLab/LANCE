@@ -7378,12 +7378,14 @@ plot_integrated_grn_gene_neighborhood <- function(
     TF_to_PCG = "#666666"
   )
   
-  node_colors <- unname(
-    node_palette[node_type]
+  node_colors <- grDevices::adjustcolor(
+    unname(node_palette[node_type]),
+    alpha.f = 0.70
   )
   
-  edge_colors <- unname(
-    edge_palette[edge_type]
+  edge_colors <- grDevices::adjustcolor(
+    unname(edge_palette[edge_type]),
+    alpha.f = 0.25
   )
   
   vertex_sizes <- rep(
@@ -7485,14 +7487,21 @@ plot_integrated_grn_gene_neighborhood <- function(
     add = TRUE
   )
   
+  vertex_labels <- rep(
+    NA_character_,
+    igraph::vcount(graph)
+  )
+  
+  if (show_labels) {
+    vertex_labels[
+      igraph::V(graph)$name == selected_gene
+    ] <- selected_gene
+  }
+  
   igraph::plot.igraph(
     graph,
     layout = layout,
-    vertex.label = if (show_labels) {
-      igraph::V(graph)$name
-    } else {
-      NA
-    },
+    vertex.label = vertex_labels,
     vertex.label.cex = label_cex,
     vertex.label.color = "#00008B",
     vertex.size = vertex_sizes,
